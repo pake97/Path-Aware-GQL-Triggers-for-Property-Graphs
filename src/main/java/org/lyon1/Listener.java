@@ -52,7 +52,9 @@ public class Listener implements TransactionEventListener<CreatedEntitiesCounter
 
         logger.info("Before Created Nodes:");
         for (Node node : data.createdNodes()) {
+            String node_id = node.getElementId().split(":")[2];
             logger.info(node.getElementId());
+            logger.info(node_id);
             Iterable<Label> labels = node.getLabels();
             for (Label l : labels){
                 logger.info("label" +  l.name());
@@ -125,10 +127,10 @@ public class Listener implements TransactionEventListener<CreatedEntitiesCounter
         for (Node node : data.createdNodes()) {
             String node_id = node.getElementId();
             try (Transaction tx = databaseService.beginTx();
-                 Result result = tx.execute("MATCH (n) WHERE n.element_id=" + node_id + " RETURN n")) {
+                 Result result = tx.execute("MATCH (n) WHERE elementId(n)='" + node_id + "' RETURN n")) {
                 while (result.hasNext()) {
                     Map<String, Object> row = result.next();
-                    logger.info(row.toString());
+                    logger.info(row.get("n").toString());
                 }
                 tx.commit();
             }
