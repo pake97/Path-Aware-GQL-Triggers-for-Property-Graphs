@@ -127,16 +127,46 @@ public class Listener implements TransactionEventListener<CreatedEntitiesCounter
         for (Node node : data.createdNodes()) {
             String node_id = node.getElementId();
             try (Transaction tx = databaseService.beginTx();
-                 Result result = tx.execute("MATCH (n) WHERE elementId(n)='" + node_id + "' RETURN n")) {
+                 Result result = tx.execute("MATCH (n) WHERE elementId(n)='" + node_id + "' RETURN n, labels(n) AS labels, keys(n) AS keys")) {
                 while (result.hasNext()) {
                     Map<String, Object> row = result.next();
                     logger.info(row.get("n").toString());
                 }
                 tx.commit();
             }
-
-
         }
+
+        for (Relationship relationship : data.createdRelationships()) {
+            String rel_id = relationship.getElementId();
+            try (Transaction tx = databaseService.beginTx();
+                 Result result = tx.execute(String.format("MATCH ()-[r:RE]->() WHERE elementID(r) = '%s' RETURN r, type(r), keys(r)", rel_id))) {
+                while (result.hasNext()) {
+                    Map<String, Object> row = result.next();
+                    logger.info(row.get("r").toString());
+                }
+                tx.commit();
+            }
+        }
+
+        for (PropertyEntry<Node> propertyEntry : data.assignedNodeProperties()) {
+            String nodeId = propertyEntry.entity().getElementId();
+            String propertyKey = propertyEntry.key();
+            Object propertyValue = propertyEntry.value();
+            try (Transaction tx = databaseService.beginTx();
+                 Result result = tx.execute(String.format(
+                         "MATCH (n) WHERE elementID(n) = '%s' RETURN n.%s AS propertyValue, n, keys(n)",
+                         nodeId, propertyKey))) {
+                while (result.hasNext()) {
+                    Map<String, Object> row = result.next();
+                    logger.info(String.format("Node: %s, Property %s = %s", nodeId, propertyKey, row.get("propertyValue")));
+                }
+                tx.commit();
+            }
+        }
+
+
+
+
     }
 //
 //
