@@ -1,0 +1,22 @@
+triggers:
+  # 1) ON_CREATE :Person -> print "A"
+  - id: person-create
+    scope: NODE
+    event: ON_CREATE
+    labels: [Person]
+    priority: 100
+    enabled: true
+    action:
+      type: log
+      message: "A"
+
+  # 2) ON_DELETE :Person -> print "B"
+  - id: person-delete
+    scope: NODE
+    event: ON_DELETE
+    labels: [Person]
+    priority: 100
+    enabled: true
+    action:
+      type: log
+      message: "B"
