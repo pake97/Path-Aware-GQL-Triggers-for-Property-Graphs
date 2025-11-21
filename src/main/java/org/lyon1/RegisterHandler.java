@@ -1,6 +1,6 @@
 package org.lyon1;
 
-import org.lyon1.path.DeltaPathMatcher;
+
 import org.lyon1.trigger.*;
 import org.neo4j.dbms.api.DatabaseManagementService;
 import org.neo4j.graphdb.event.TransactionEventListener;
@@ -15,7 +15,6 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.neo4j.configuration.GraphDatabaseSettings.DEFAULT_DATABASE_NAME;
@@ -31,29 +30,26 @@ public final class RegisterHandler {
     private final Log neoLog;
 
     // Core singletons used by your plugin
-    private final ImmutableTriggerRegistry registry;
-    private final InMemoryOrchestrator orchestrator;
+    private TriggerRegistry registry;
+    private InMemoryOrchestrator orchestrator;
 
     // Listener lifecycle
     private volatile TransactionEventListener<?> listener;
     private final AtomicBoolean registered = new AtomicBoolean(false);
     private volatile String registeredDb = null;
+    private TriggerRegistryFactory trFactory;
 
     public RegisterHandler(@Context DatabaseManagementService dbms, @Context Log log) {
         this.dbms = dbms;
         this.neoLog = log;
+        this .trFactory = new TriggerRegistryFactory();
 
-        // 1) Build registry + orchestrator once
-        this.registry = new ImmutableTriggerRegistry();
-        this.orchestrator = new InMemoryOrchestrator(registry);
-
-        // (optional) observe registry version bumps
-        registry.addListener(snap -> neoLog.info("Trigger registry updated: v{}", snap.version()));
     }
 
     /** Register the transaction listener (idempotent). */
     @POST @Path("/register")
-    public Response register(@QueryParam("db") @DefaultValue(DEFAULT_DATABASE_NAME) String dbName) {
+    public Response register(@QueryParam("db") @DefaultValue(DEFAULT_DATABASE_NAME) String dbName,
+                             @QueryParam("type") @DefaultValue("AUTOMATON") String type) {
         try {
             if (registered.get()) {
                 if (dbName.equals(registeredDb)) {
@@ -63,9 +59,24 @@ public final class RegisterHandler {
                         .entity(json(Map.of("error","listener already registered on db " + registeredDb))).build();
             }
 
+            if(type.equals("AUTOMATON")) {
+                // 1) Create the registry & orchestrator
+                this.registry = trFactory.create(TriggerType.AUTOMATON, dbms);
+
+            } else {
+                // Fallback to basic registry/orchestrator
+                this.registry = trFactory.create(TriggerType.INDEX, dbms);
+
+            }
+
+            this.orchestrator = new InMemoryOrchestrator(registry);
+            // (optional) observe registry version bumps
+
+            registry.addListener(snap -> neoLog.info("Trigger registry updated: v{}", snap.version()));
+
             // 2) Create the listener, pass orchestrator/registry
             // If you have your own Listener class, make sure its ctor accepts these.
-            TransactionEventListener<?> l = new Listener(neoLog, orchestrator, registry, new DeltaPathMatcher());
+            TransactionEventListener<?> l = new Listener(neoLog, orchestrator, registry);
 
             dbms.registerTransactionEventListener(dbName, l);
 
@@ -137,19 +148,21 @@ public final class RegisterHandler {
         int priority = ((Number) body.getOrDefault("priority", 100)).intValue();
 
         // Build activation
-        TriggerRegistry.NodeActivation activation = new TriggerRegistry.NodeActivation(
-                Set.of(label), Map.of(), TriggerRegistry.EventType.valueOf(event));
+        TriggerRegistryInterface.NodeActivation activation = new TriggerRegistryInterface.NodeActivation(
+                Set.of(label), Map.of(), TriggerRegistryInterface.EventType.valueOf(event));
 
         // Register a minimal FullTrigger (predicate always true, action logs)
         String id = orchestrator.register(
                 new FullTrigger(
                         null, // id -> generated
-                        TriggerRegistry.Scope.NODE,
+                        TriggerRegistryInterface.Scope.NODE,
                         activation,
                         priority,
                         true,
                         ctx -> true,
-                        committed -> neoLog.info("Trigger '{}' fired for label={}", "node-"+label, label)
+                        committed -> neoLog.info("Trigger '{}' fired for label={}", "node-"+label, label),
+                        TriggerRegistryInterface.Time.AFTER_COMMIT,
+                        0
                 )
         );
 

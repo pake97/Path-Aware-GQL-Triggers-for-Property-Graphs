@@ -2,9 +2,6 @@ package org.lyon1.trigger;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
-import java.util.function.Predicate;
-import org.lyon1.trigger.FullTrigger;
 
 /**
  * Orchestrator:
@@ -17,11 +14,11 @@ public final class InMemoryOrchestrator {
 
     /* -------------------- Storage & registry wiring -------------------- */
 
-    private final ImmutableTriggerRegistry registry;
+    private final TriggerRegistry registry;
     /** id -> FullTrigger; copy-on-write for atomic reads */
     private final AtomicReference<Map<String, FullTrigger>> full = new AtomicReference<>(Map.of());
 
-    public InMemoryOrchestrator(ImmutableTriggerRegistry registry) {
+    public InMemoryOrchestrator(TriggerRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "registry");
     }
 
@@ -33,9 +30,9 @@ public final class InMemoryOrchestrator {
         final String id = (t.id() != null && !t.id().isBlank()) ? t.id() : UUID.randomUUID().toString();
 
         // 1) write into registry (indexed view)
-        var slim = new TriggerRegistry.Trigger(
-                id, t.scope(), t.activation(), t.priority(), t.enabled()
-        );
+        var slim = new TriggerRegistryInterface.Trigger(
+                id, t.scope(), t.activation(), t.priority(),  t.order(),t.time(), t.enabled()
+                );
         registry.register(slim);
 
         // 2) store executable definition (copy-on-write)
@@ -49,8 +46,8 @@ public final class InMemoryOrchestrator {
         if (t.id() == null || t.id().isBlank()) return false;
 
         // upsert slim into registry (only if exists per interface)
-        boolean ok = registry.replace(new TriggerRegistry.Trigger(
-                t.id(), t.scope(), t.activation(), t.priority(), t.enabled()
+        boolean ok = registry.replace(new TriggerRegistryInterface.Trigger(
+                t.id(), t.scope(), t.activation(), t.priority(),  t.order(),t.time(), t.enabled()
         ));
         if (!ok) return false;
 
@@ -83,12 +80,12 @@ public final class InMemoryOrchestrator {
         Objects.requireNonNull(triggers, "triggers");
 
         // build slim set first
-        List<TriggerRegistry.Trigger> slim = new ArrayList<>(triggers.size());
+        List<TriggerRegistryInterface.Trigger> slim = new ArrayList<>(triggers.size());
         Map<String, FullTrigger> next = new LinkedHashMap<>();
         for (FullTrigger ft : triggers) {
             if (ft == null) continue;
             String id = (ft.id() != null && !ft.id().isBlank()) ? ft.id() : UUID.randomUUID().toString();
-            slim.add(new TriggerRegistry.Trigger(id, ft.scope(), ft.activation(), ft.priority(), ft.enabled()));
+            slim.add(new TriggerRegistryInterface.Trigger(id, ft.scope(), ft.activation(), ft.priority(),  ft.order(),ft.time(), ft.enabled()));
             next.put(id, ft.withId(id));
         }
 
@@ -106,11 +103,11 @@ public final class InMemoryOrchestrator {
         return Optional.ofNullable(full.get().get(id));
     }
 
-    public TriggerRegistry.Snapshot snapshot() {
+    public TriggerRegistryInterface.Snapshot snapshot() {
         return registry.snapshot();
     }
 
-    public ImmutableTriggerRegistry registry() {
+    public TriggerRegistry registry() {
         return registry;
     }
 

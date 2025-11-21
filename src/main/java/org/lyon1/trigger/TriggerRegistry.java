@@ -1,122 +1,236 @@
 package org.lyon1.trigger;
 
-
-import java.util.Map;
-import java.util.Set;
+import org.neo4j.dbms.api.DatabaseManagementService;
 
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
-/**
- * Thread-safe catalog of triggers with inverted indexes for fast candidate lookup.
- * Typical usage:
- *   - Writers/builders construct a new registry state (copy-on-write) and swap it in one shot.
- *   - Readers (Tx listeners) grab a read-only Snapshot once per tx and use IndexView to find candidates.
- *
- * Contract:
- *   - Implementations MUST be safe for concurrent reads and occasional writes.
- *   - Snapshots and the maps they expose MUST be immutable (unmodifiable).
- *   - version() MUST strictly increase on any structural change visible to readers.
- */
-public interface TriggerRegistry {
+public abstract class TriggerRegistry implements TriggerRegistryInterface {
 
-    /* ======== Core model types expected to exist in your codebase ======== */
-    enum EventType { ON_CREATE, ON_DELETE }
-    enum Scope { NODE, RELATIONSHIP, PATH }
 
-    sealed interface Activation permits NodeActivation, RelActivation, PathActivation {}
+    final DatabaseManagementService dbms;
+    /* ---------- Internal state ---------- */
 
-    record NodeActivation(Set<String> anyOfLabels,
-                          Map<String,Object> propertyEq,
-                          EventType eventType) implements Activation {}
+    private static final class State {
+        final long version;
+        final Map<String, Trigger> byId;            // unmodifiable
+        final IndexViewImpl indexView;              // unmodifiable sets inside
+        final SnapshotImpl snapshot;
 
-    record RelActivation(String type,
-                         Set<String> startLabels,
-                         Set<String> endLabels,
-                         EventType eventType) implements Activation {}
 
-    record PathActivation(String canonicalSignature,
-                          int maxLen,
-                          EventType eventType) implements Activation {}
+        State(long version,
+              Map<String, Trigger> byId,
+              IndexViewImpl indexView) {
+            this.version = version;
+            this.byId = byId;
+            this.indexView = indexView;
+            this.snapshot = new SnapshotImpl(version, byId, indexView);
+        }
+    }
 
-    record Trigger(String id,
-                   Scope scope,
-                   Activation activation,
-                   int priority,
-                   boolean enabled) {}
+    private final AtomicReference<State> ref;
+    private final CopyOnWriteArrayList<Consumer<Snapshot>> listeners = new CopyOnWriteArrayList<>();
 
-    /* ======================= Lifecycle / mutation ======================= */
+    public TriggerRegistry(DatabaseManagementService dbms) {
+        this.dbms = dbms;
+        this.ref = new AtomicReference<>(new State(
+                0L,
+                Collections.unmodifiableMap(new LinkedHashMap<>()),
+                IndexViewImpl.empty()
+        ));
+    }
 
-    /**
-     * @return monotonically increasing registry version; bumps on any visible change.
-     */
-    long version();
+    /* ---------- TriggerRegistry ---------- */
 
-    /**
-     * Registers a trigger and returns its (possibly generated) id.
-     * If trigger.id() is null/blank, the implementation MUST generate a unique id.
-     * MUST bump version on success.
-     */
-    String register(Trigger trigger);
+    @Override
+    public long version() {
+        return ref.get().version;
+    }
 
-    /**
-     * Replace an existing trigger by id. No-op and returns false if not present.
-     * MUST bump version on success.
-     */
-    boolean replace(Trigger trigger);
+    @Override
+    public String register(Trigger trigger) {
+        Objects.requireNonNull(trigger, "trigger");
+        String id = (trigger.id() != null && !trigger.id().isBlank())
+                ? trigger.id()
+                : UUID.randomUUID().toString();
 
-    /**
-     * Enable/disable a trigger by id. Returns false if not found or no change.
-     * MUST bump version on change.
-     */
-    boolean enable(String triggerId, boolean enabled);
+        Trigger normalized = new Trigger(
+                id,
+                trigger.scope(),
+                trigger.activation(),
+                trigger.priority(),
+                trigger.order(),
+                trigger.time(),
+                trigger.enabled()
+        );
 
-    /**
-     * Unregister by id. MUST bump version on success.
-     */
-    boolean unregister(String triggerId);
+        State before = ref.get();
+        if (before.byId.containsKey(id)) {
+            // Upsert semantics? The interface says "register" should add; if exists, we replace.
+            // Change to error if you prefer strict "must be new".
+        }
 
-    /**
-     * Atomically replace entire registry contents with the provided triggers (copy-on-write swap).
-     * MUST bump version if the new set differs from current.
-     */
-    void replaceAll(Collection<Trigger> triggers);
+        Map<String, Trigger> nextById = new LinkedHashMap<>(before.byId);
+        nextById.put(id, normalized);
 
-    /* =========================== Introspection ========================== */
+        State after = new State(
+                before.version + 1,
+                Collections.unmodifiableMap(nextById),
+                buildIndexes(nextById.values())
+        );
 
-    /**
-     * Immutable point-in-time view. Obtain this once per transaction and reuse it.
-     */
-    Snapshot snapshot();
+        ref.set(after);
+        notifyListeners(after.snapshot);
+        return id;
+    }
 
-    /**
-     * Lightweight query helpers (read ops do NOT mutate version).
-     */
-    Optional<Trigger> get(String triggerId);
-    boolean contains(String triggerId);
-    List<Trigger> list(); // unmodifiable copy, consistent with current version
+    @Override
+    public boolean replace(Trigger trigger) {
+        Objects.requireNonNull(trigger, "trigger");
+        String id = trigger.id();
+        if (id == null || id.isBlank()) return false;
 
-    /**
-     * Subscribe to version changes (e.g., for metrics, hot caches).
-     * Implementations may deliver callbacks asynchronously. The callback MUST be invoked
-     * AFTER the new state becomes visible to readers.
-     */
-    void addListener(Consumer<Snapshot> onVersionChange);
-    void removeListener(Consumer<Snapshot> onVersionChange);
+        State before = ref.get();
+        if (!before.byId.containsKey(id)) return false;
 
-    /* ======================== Candidate convenience ===================== */
+        Trigger normalized = new Trigger(
+                id,
+                trigger.scope(),
+                trigger.activation(),
+                trigger.priority(),
+                trigger.order(),
+                trigger.time(),
+                trigger.enabled()
+        );
 
-    /**
-     * Convenience: compute candidate trigger IDs for a node event given its labels.
-     * Implementations may override for performance; default uses IndexView maps.
-     */
-    default Set<String> candidatesForNode(EventType eventType, Iterable<String> labels) {
+        Map<String, Trigger> nextById = new LinkedHashMap<>(before.byId);
+        nextById.put(id, normalized);
+
+        State after = new State(
+                before.version + 1,
+                Collections.unmodifiableMap(nextById),
+                buildIndexes(nextById.values())
+        );
+
+        ref.set(after);
+        notifyListeners(after.snapshot);
+        return true;
+    }
+
+    @Override
+    public boolean enable(String triggerId, boolean enabled) {
+        Objects.requireNonNull(triggerId, "triggerId");
+        State before = ref.get();
+        Trigger cur = before.byId.get(triggerId);
+        if (cur == null || cur.enabled() == enabled) return false;
+
+        Trigger updated = new Trigger(
+                cur.id(), cur.scope(), cur.activation(), cur.priority(), cur.order(), cur.time(), enabled
+        );
+
+        Map<String, Trigger> nextById = new LinkedHashMap<>(before.byId);
+        nextById.put(triggerId, updated);
+
+        State after = new State(
+                before.version + 1,
+                Collections.unmodifiableMap(nextById),
+                buildIndexes(nextById.values())
+        );
+
+        ref.set(after);
+        notifyListeners(after.snapshot);
+        return true;
+    }
+
+    @Override
+    public boolean unregister(String triggerId) {
+        Objects.requireNonNull(triggerId, "triggerId");
+        State before = ref.get();
+        if (!before.byId.containsKey(triggerId)) return false;
+
+        Map<String, Trigger> nextById = new LinkedHashMap<>(before.byId);
+        nextById.remove(triggerId);
+
+        State after = new State(
+                before.version + 1,
+                Collections.unmodifiableMap(nextById),
+                buildIndexes(nextById.values())
+        );
+
+        ref.set(after);
+        notifyListeners(after.snapshot);
+        return true;
+    }
+
+    @Override
+    public void replaceAll(Collection<Trigger> triggers) {
+        Objects.requireNonNull(triggers, "triggers");
+        Map<String, Trigger> nextById = new LinkedHashMap<>();
+        for (Trigger t : triggers) {
+            if (t == null) continue;
+            String id = (t.id() != null && !t.id().isBlank()) ? t.id() : UUID.randomUUID().toString();
+            nextById.put(id, new Trigger(id, t.scope(), t.activation(), t.priority(), t.order(),t.time(), t.enabled()));
+        }
+
+        State before = ref.get();
+        // bump version only if content differs
+        boolean differs = !before.byId.equals(nextById);
+        if (!differs) return;
+
+        State after = new State(
+                before.version + 1,
+                Collections.unmodifiableMap(nextById),
+                buildIndexes(nextById.values())
+        );
+
+        ref.set(after);
+        notifyListeners(after.snapshot);
+    }
+
+    @Override
+    public Snapshot snapshot() {
+        return ref.get().snapshot;
+    }
+
+    @Override
+    public Optional<Trigger> get(String triggerId) {
+        return Optional.ofNullable(ref.get().byId.get(triggerId));
+    }
+
+    @Override
+    public boolean contains(String triggerId) {
+        return ref.get().byId.containsKey(triggerId);
+    }
+
+    @Override
+    public List<Trigger> list() {
+        return List.copyOf(ref.get().byId.values());
+    }
+
+    @Override
+    public void addListener(Consumer<Snapshot> onVersionChange) {
+        if (onVersionChange != null) listeners.add(onVersionChange);
+    }
+
+    @Override
+    public void removeListener(Consumer<Snapshot> onVersionChange) {
+        if (onVersionChange != null) listeners.remove(onVersionChange);
+    }
+
+
+
+    public Set<String> candidatesForNode(EventType eventType, Iterable<String> labels) {
         Snapshot s = snapshot();
         IndexView ix = s.indexView();
+        Map<String, Set<String>> eventActivations = ix.nodeIndex().getOrDefault(eventType, Map.of());
         Set<String> out = new LinkedHashSet<>();
-        out.addAll(ix.globalNode().getOrDefault(eventType, Set.of()));
+        if( eventActivations.isEmpty()) {
+            return Set.of();
+        }
         for (String lbl : labels) {
-            out.addAll(ix.nodeLabel().getOrDefault(lbl, Set.of()));
+            out.addAll(eventActivations.getOrDefault(lbl, Set.of()));
         }
         return out;
     }
@@ -124,79 +238,168 @@ public interface TriggerRegistry {
     /**
      * Convenience: candidates for a relationship event given the relationship type.
      */
-    default Set<String> candidatesForRelationship(EventType eventType, String relType) {
+    public Set<String> candidatesForRelationship(EventType eventType, String relType) {
         Snapshot s = snapshot();
         IndexView ix = s.indexView();
+        Map<String, Set<String>> eventActivations = ix.relIndex().getOrDefault(eventType, Map.of());
         Set<String> out = new LinkedHashSet<>();
-        out.addAll(ix.globalRel().getOrDefault(eventType, Set.of()));
-        out.addAll(ix.relType().getOrDefault(relType, Set.of()));
+        if (eventActivations.isEmpty())
+        {
+            return Set.of();
+        }
+        out.addAll(eventActivations.getOrDefault(relType, Set.of()));
         return out;
     }
 
-    /**
-     * Convenience: candidates for a path event given a canonical signature.
-     * (e.g., "(:A&:B)-[:T]->(:C)<-[:U]-(:D)")
-     */
-    default Set<String> candidatesForPath(String canonicalSignature) {
-        Snapshot s = snapshot();
-        return s.indexView().pathSignature().getOrDefault(canonicalSignature, Set.of());
-    }
 
-    /* ============================ Read-only API ========================= */
+    /* ---------- Snapshot & IndexView implementations ---------- */
 
-    /**
-     * A frozen, immutable view of the registry at a specific version.
-     * All collections returned by Snapshot (directly or via IndexView) MUST be unmodifiable.
-     */
-    interface Snapshot {
-        long version();
+    private static final class SnapshotImpl implements Snapshot {
+        private final long version;
+        private final Map<String, Trigger> byId;
+        private final IndexView indexView;
 
-        /** All triggers by id (unmodifiable). */
-        Map<String, Trigger> byId();
-
-        /** Fast lookup structures used by the detector. */
-        IndexView indexView();
-
-        /** Convenience listings (stable iteration order recommended). */
-        default List<Trigger> triggers() {
-            return List.copyOf(byId().values());
+        SnapshotImpl(long version, Map<String, Trigger> byId, IndexView indexView) {
+            this.version = version;
+            this.byId = byId;
+            this.indexView = indexView;
         }
 
-        default Optional<Trigger> get(String triggerId) {
-            return Optional.ofNullable(byId().get(triggerId));
-        }
+        @Override public long version() { return version; }
+        @Override public Map<String, Trigger> byId() { return byId; }
+        @Override public IndexView indexView() { return indexView; }
     }
 
-    /**
-     * Read-only inverted indexes (feature → trigger IDs).
-     * Each Set<String> is the set of trigger IDs matching that feature.
-     */
-    interface IndexView {
-        /**
-         * Node label → trigger IDs (for NodeActivation with label predicates).
-         * Keys are label names EXACT as stored in Neo4j (case-sensitive).
-         */
-        Map<String, Set<String>> nodeLabel();
+    private static final class IndexViewImpl implements IndexView {
+        private final Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> nodeIndex;
+        private final Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> relIndex;
+        private final TriggerRegistryInterface.PathMonitor pathMonitor;
 
-        /**
-         * Relationship type → trigger IDs (for RelActivation).
-         */
-        Map<String, Set<String>> relType();
+        private IndexViewImpl(
+                Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> nodeIndex,
+                Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> relIndex,
+                PathMonitor pathMonitor
+        ) {
+            this.nodeIndex = nodeIndex;
+            this.relIndex = relIndex;
+            this.pathMonitor = pathMonitor;
+        }
 
-        /**
-         * EventType → trigger IDs for label-agnostic node triggers (e.g., "any node create/delete").
-         */
-        Map<EventType, Set<String>> globalNode();
+        static IndexViewImpl empty() {
+            return new IndexViewImpl(
+                    Collections.unmodifiableMap(new HashMap<>()),
+                    Collections.unmodifiableMap(new HashMap<>()),
+                    new EmptyPathMonitor()
+            );
+        }
 
-        /**
-         * EventType → trigger IDs for type-agnostic relationship triggers.
-         */
-        Map<EventType, Set<String>> globalRel();
+        @Override public Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> nodeIndex() { return nodeIndex; }
+        @Override public Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> relIndex() { return relIndex; }
+        @Override public PathMonitor pathMonitor() { return pathMonitor; }
 
-        /**
-         * Canonical path signature → trigger IDs (for PathActivation).
-         * Signature format is implementation-defined but MUST be stable for the same pattern.
-         */
-        Map<String, Set<String>> pathSignature();
+    }
+
+
+    // trivial implementation
+    private static final class EmptyPathMonitor implements PathMonitor {
+
+        @Override
+        public Set<String> findMatchingTriggers(String canonicalSignature) {
+            return Set.of();
+        }
+
+    }
+
+
+    protected abstract PathMonitor buildPathMonitor(Collection<TriggerRegistry.Trigger> triggers);
+
+    /* ---------- Index building ---------- */
+
+    protected IndexViewImpl buildIndexes(Collection<TriggerRegistry.Trigger> triggers) {
+        Map<EventType, Map<String, Set<String>>> nodeIndex = new HashMap<>();
+        Map<EventType, Map<String, Set<String>>> relIndex  = new HashMap<>();
+        Map<String, Set<String>> createEventMapNodes      = new HashMap<>();
+        Map<String, Set<String>> createEventMapRel        = new HashMap<>();
+        Map<String, Set<String>> deleteEventMapNode       = new HashMap<>();
+        Map<String, Set<String>> deleteEventMapRel        = new HashMap<>();
+
+        nodeIndex.put(EventType.ON_DELETE, deleteEventMapNode);
+        nodeIndex.put(EventType.ON_CREATE, createEventMapNodes);
+        relIndex.put(EventType.ON_DELETE, deleteEventMapRel);
+        relIndex.put(EventType.ON_CREATE, createEventMapRel);
+
+        for (Trigger t : triggers) {
+            if (t == null) continue;
+            String id   = t.id();
+            Scope scope = t.scope();
+            Activation act = t.activation();
+
+            if (scope == Scope.NODE && act instanceof NodeActivation na) {
+                Set<String> labels = na.anyOfLabels();
+                EventType ev = na.eventType();
+                Map<String, Set<String>> eventMap = nodeIndex.get(ev);
+                for (String lbl : labels) {
+                    add(eventMap, lbl, id);
+                }
+
+            } else if (scope == Scope.RELATIONSHIP && act instanceof RelActivation ra) {
+                String type = ra.type();
+                EventType ev = ra.eventType();
+                Map<String, Set<String>> eventMap = relIndex.get(ev);
+                add(eventMap, type, id);
+            }
+
+            // IMPORTANT: PATH logic is not here – that’s what buildPathMonitor() is for
+        }
+
+        // ask subclass how to handle paths
+        PathMonitor pathMonitor = buildPathMonitor(triggers);
+
+        return new IndexViewImpl(
+                freezeMapMap(nodeIndex),
+                freezeMapMap(relIndex),
+                pathMonitor
+        );
+    }
+
+
+    private static <K> void add(Map<K, Set<String>> map, K key, String id) {
+        map.computeIfAbsent(key, k -> new LinkedHashSet<>()).add(id);
+    }
+
+    /** Freeze a leaf map like Map<String, Set<String>> */
+    private static Map<String, Set<String>> freezeMap(Map<String, Set<String>> in) {
+        Map<String, Set<String>> out = new LinkedHashMap<>(in.size());
+        for (Map.Entry<String, Set<String>> e : in.entrySet()) {
+            out.put(e.getKey(), Collections.unmodifiableSet(new LinkedHashSet<>(e.getValue())));
+        }
+        return Collections.unmodifiableMap(out);
+    }
+
+    /** Freeze a nested map like Map<EventType, Map<String, Set<String>>> */
+    private static Map<EventType, Map<String, Set<String>>> freezeMapMap(
+            Map<EventType, Map<String, Set<String>>> in) {
+        Map<EventType, Map<String, Set<String>>> out = new EnumMap<>(EventType.class);
+        for (Map.Entry<EventType, Map<String, Set<String>>> e : in.entrySet()) {
+            // Freeze inner leaf map first
+            Map<String, Set<String>> inner = e.getValue();
+            Map<String, Set<String>> frozenInner = new LinkedHashMap<>(inner.size());
+            for (Map.Entry<String, Set<String>> ie : inner.entrySet()) {
+                frozenInner.put(ie.getKey(),
+                        Collections.unmodifiableSet(new LinkedHashSet<>(ie.getValue())));
+            }
+            out.put(e.getKey(), Collections.unmodifiableMap(frozenInner));
+        }
+        return Collections.unmodifiableMap(out);
+    }
+
+
+
+
+    private void notifyListeners(Snapshot snap) {
+        for (Consumer<Snapshot> c : listeners) {
+            try { c.accept(snap); } catch (Exception ignore) { /* don't break others */ }
+        }
     }
 }
+

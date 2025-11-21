@@ -7,19 +7,19 @@ import org.neo4j.graphdb.event.TransactionData;
  * Context object passed to actions in afterCommit.
  */
 public final class CommittedContext {
-    private final TriggerRegistry.Trigger trigger;
+    private final TriggerRegistryInterface.Trigger trigger;
     private final TransactionData data;
     private final GraphDatabaseService db;
     private final String dedupeKey;
 
-    public CommittedContext(TriggerRegistry.Trigger trigger, TransactionData data, GraphDatabaseService db, String dedupeKey) {
+    public CommittedContext(TriggerRegistryInterface.Trigger trigger, TransactionData data, GraphDatabaseService db, String dedupeKey) {
         this.trigger = trigger;
         this.data = data;
         this.db = db;
         this.dedupeKey = dedupeKey;
     }
 
-    public TriggerRegistry.Trigger trigger() {
+    public TriggerRegistryInterface.Trigger trigger() {
         return trigger;
     }
 

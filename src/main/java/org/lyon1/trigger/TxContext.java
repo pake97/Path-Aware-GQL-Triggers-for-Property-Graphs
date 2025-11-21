@@ -42,7 +42,7 @@ public final class TxContext {
      * Build a stable dedupe key: tx id +
      * id (extend with element ids if needed).
      */
-    public String dedupeKey(TriggerRegistry.Trigger t) {
+    public String dedupeKey(TriggerRegistryInterface.Trigger t) {
         // Neo4j doesn't expose tx id here; using hash of data snapshots is one option.
         // Replace with your tx id if you propagate it via tx metadata.
         int h = Objects.hash(System.identityHashCode(data), t.id(), registryVersion);

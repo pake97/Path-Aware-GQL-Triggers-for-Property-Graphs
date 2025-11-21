@@ -143,6 +143,7 @@
                                     </excludes>
                                 </filter>
                             </filters>
+
                         </configuration>
                     </execution>
                 </executions>
@@ -161,7 +162,7 @@
                         </goals>
                         <configuration>
                             <target>
-                                <copy file="${project.build.directory}/${project.build.finalName}.jar"
+                                <copy file="${project.build.directory}/${project.build.finalName}-shaded.jar"
                                       tofile="/Users/amedeo/Downloads/neo4j-community-2025.05.0/plugins/${project.build.finalName}.jar"/>
                                 <exec executable="sh">
                                     <arg value="/Users/amedeo/Desktop/deploy.sh"/>

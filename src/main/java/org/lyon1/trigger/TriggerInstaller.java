@@ -52,30 +52,34 @@ public final class TriggerInstaller {
             String eventStr = reqStr(m, "event");        // ON_CREATE | ON_DELETE
             Integer priority = intOr(m.get("priority"), 100);
             Boolean enabled = boolOr(m.get("enabled"), true);
+            String timeStr = reqStr(m, "time");          // BEFORE | AFTER (not used here)
+            int order = ids.size();
 
-            TriggerRegistry.Scope scope = TriggerRegistry.Scope.valueOf(scopeStr);
-            TriggerRegistry.EventType event = TriggerRegistry.EventType.valueOf(eventStr);
+
+            TriggerRegistryInterface.Scope scope = TriggerRegistryInterface.Scope.valueOf(scopeStr);
+            TriggerRegistryInterface.EventType event = TriggerRegistryInterface.EventType.valueOf(eventStr);
+            TriggerRegistryInterface.Time time  = TriggerRegistryInterface.Time.valueOf(timeStr);
 
             // Activation (one of: labels, relType, pathSignature)
-            TriggerRegistry.Activation activation = switch (scope) {
+            TriggerRegistryInterface.Activation activation = switch (scope) {
                 case NODE -> {
                     Set<String> labels = setOfStrings(m.get("labels"));
                     if (labels.isEmpty()) {
                         throw new IllegalArgumentException("NODE trigger requires non-empty 'labels'");
                     }
-                    yield new TriggerRegistry.NodeActivation(labels, Map.of(), event);
+                    yield new TriggerRegistryInterface.NodeActivation(labels, Map.of(), event);
                 }
                 case RELATIONSHIP -> {
-                    String relType = reqStr(m, "relType");
+                    String relType = reqStr(m, "types");
                     // startLabels/endLabels are optional
                     Set<String> start = setOfStrings(m.get("startLabels"));
                     Set<String> end = setOfStrings(m.get("endLabels"));
-                    yield new TriggerRegistry.RelActivation(relType, start, end, event);
+                    yield new TriggerRegistryInterface.RelActivation(relType, start, end, event);
                 }
                 case PATH -> {
                     String signature = reqStr(m, "pathSignature");
                     int maxLen = intOr(m.get("maxLen"), 4);
-                    yield new TriggerRegistry.PathActivation(signature, maxLen, event);
+                    yield new TriggerRegistryInterface.PathActivation(signature, maxLen, event);
                 }
             };
 
@@ -87,7 +91,7 @@ public final class TriggerInstaller {
 
             // Register (generate an id if absent)
             var full = new FullTrigger(
-                    id, scope, activation, priority, enabled, predicate, action
+                    id, scope, activation, priority, enabled, predicate, action, time, order
             );
 
             String assignedId = (id == null || id.isBlank())

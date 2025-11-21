@@ -34,12 +34,3 @@ record PathActivation(
         EventType eventType
 ) implements Activation {}
 
-record Trigger(
-        String id,
-        Scope scope,
-        Activation activation,
-        int priority,                     // lower first
-        boolean enabled,
-        Predicate<TxContext> predicate,   // precise check on matched elements
-        Consumer<TxContext> action        // what to do (before/after commit)
-) {}
