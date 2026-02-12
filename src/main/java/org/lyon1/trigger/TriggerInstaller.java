@@ -22,19 +22,22 @@ public final class TriggerInstaller {
 
     /** Convenience: install from a file path. */
     public List<String> installFromYaml(Path path) throws Exception {
-        log.info("Path for trigger config YAML "+path.toString());
+        log.info("Path for trigger config YAML " + path.toString());
         try (InputStream in = Files.newInputStream(path)) {
             return installFromYaml(in);
         }
     }
 
-    /** Install from a YAML InputStream. Returns the list of trigger IDs created/replaced. */
+    /**
+     * Install from a YAML InputStream. Returns the list of trigger IDs
+     * created/replaced.
+     */
     @SuppressWarnings("unchecked")
     public List<String> installFromYaml(InputStream yamlStream) {
         Objects.requireNonNull(yamlStream, "yamlStream");
         Yaml yaml = new Yaml();
         Object loaded = yaml.load(yamlStream);
-        log.warn("YAML LOADED "+loaded.toString());
+        log.warn("YAML LOADED " + loaded.toString());
         if (!(loaded instanceof Map<?, ?> root)) {
             throw new IllegalArgumentException("YAML root must be a mapping with key 'triggers'");
         }
@@ -45,20 +48,22 @@ public final class TriggerInstaller {
 
         List<String> ids = new ArrayList<>();
         for (Object o : list) {
-            if (!(o instanceof Map<?, ?> m)) continue;
+            if (!(o instanceof Map<?, ?> m))
+                continue;
 
-            String id = str(m.get("id"));                // optional
-            String scopeStr = reqStr(m, "scope");        // NODE | RELATIONSHIP | PATH
-            String eventStr = reqStr(m, "event");        // ON_CREATE | ON_DELETE
+            String id = str(m.get("id")); // optional
+            String scopeStr = reqStr(m, "scope"); // NODE | RELATIONSHIP | PATH
+            String eventStr = reqStr(m, "event"); // ON_CREATE | ON_DELETE
             Integer priority = intOr(m.get("priority"), 100);
             Boolean enabled = boolOr(m.get("enabled"), true);
-            String timeStr = reqStr(m, "time");          // BEFORE | AFTER (not used here)
+            String timeStr = str(m.get("time"));
+            TriggerRegistryInterface.Time time = (timeStr == null)
+                    ? TriggerRegistryInterface.Time.AFTER_COMMIT
+                    : TriggerRegistryInterface.Time.valueOf(timeStr);
             int order = ids.size();
-
 
             TriggerRegistryInterface.Scope scope = TriggerRegistryInterface.Scope.valueOf(scopeStr);
             TriggerRegistryInterface.EventType event = TriggerRegistryInterface.EventType.valueOf(eventStr);
-            TriggerRegistryInterface.Time time  = TriggerRegistryInterface.Time.valueOf(timeStr);
 
             // Activation (one of: labels, relType, pathSignature)
             TriggerRegistryInterface.Activation activation = switch (scope) {
@@ -91,8 +96,7 @@ public final class TriggerInstaller {
 
             // Register (generate an id if absent)
             var full = new FullTrigger(
-                    id, scope, activation, priority, enabled, predicate, action, time, order
-            );
+                    id, scope, activation, priority, enabled, predicate, action, time, order);
 
             String assignedId = (id == null || id.isBlank())
                     ? orchestrator.register(full)
@@ -111,31 +115,47 @@ public final class TriggerInstaller {
 
     /* ---------------- helpers ---------------- */
 
-    private static String str(Object o) { return o == null ? null : String.valueOf(o).trim(); }
-    private static String reqStr(Map<?,?> m, String key) {
+    private static String str(Object o) {
+        return o == null ? null : String.valueOf(o).trim();
+    }
+
+    private static String reqStr(Map<?, ?> m, String key) {
         Object v = m.get(key);
-        if (v == null) throw new IllegalArgumentException("Missing required key: " + key);
+        if (v == null)
+            throw new IllegalArgumentException("Missing required key: " + key);
         String s = String.valueOf(v).trim();
-        if (s.isEmpty()) throw new IllegalArgumentException("Empty value for key: " + key);
+        if (s.isEmpty())
+            throw new IllegalArgumentException("Empty value for key: " + key);
         return s;
     }
+
     private static int intOr(Object o, int def) {
-        if (o instanceof Number n) return n.intValue();
-        if (o == null) return def;
+        if (o instanceof Number n)
+            return n.intValue();
+        if (o == null)
+            return def;
         return Integer.parseInt(String.valueOf(o));
     }
+
     private static boolean boolOr(Object o, boolean def) {
-        if (o instanceof Boolean b) return b;
-        if (o == null) return def;
+        if (o instanceof Boolean b)
+            return b;
+        if (o == null)
+            return def;
         return Boolean.parseBoolean(String.valueOf(o));
     }
+
     @SuppressWarnings("unchecked")
     private static Set<String> setOfStrings(Object o) {
-        if (o == null) return Set.of();
-        if (o instanceof String s) return Set.of(s);
+        if (o == null)
+            return Set.of();
+        if (o instanceof String s)
+            return Set.of(s);
         if (o instanceof Collection<?> c) {
             LinkedHashSet<String> out = new LinkedHashSet<>();
-            for (Object e : c) if (e != null) out.add(String.valueOf(e).trim());
+            for (Object e : c)
+                if (e != null)
+                    out.add(String.valueOf(e).trim());
             return Collections.unmodifiableSet(out);
         }
         throw new IllegalArgumentException("Expected string or list of strings, got: " + o.getClass());
@@ -143,7 +163,7 @@ public final class TriggerInstaller {
 
     @SuppressWarnings("unchecked")
     private Consumer<CommittedContext> buildAction(Object node) {
-        if (!(node instanceof Map<?,?> m)) {
+        if (!(node instanceof Map<?, ?> m)) {
             return ctx -> log.info("Trigger fired (no action configured)");
         }
 
@@ -151,14 +171,14 @@ public final class TriggerInstaller {
 
         switch (normalizedType) {
             case "log" -> {
-                final String msg  = Optional.ofNullable(str(m.get("message"))).orElse("Trigger fired");
-                final String lvl  = Optional.ofNullable(str(m.get("level"))).orElse("info").toLowerCase(Locale.ROOT);
+                final String msg = Optional.ofNullable(str(m.get("message"))).orElse("Trigger fired");
+                final String lvl = Optional.ofNullable(str(m.get("level"))).orElse("info").toLowerCase(Locale.ROOT);
                 return ctx -> {
                     switch (lvl) {
-                        case "warn"  -> log.warn(msg);
+                        case "warn" -> log.warn(msg);
                         case "error" -> log.error(msg);
                         case "debug" -> log.debug(msg);
-                        default      -> log.info(msg);
+                        default -> log.info(msg);
                     }
                 };
             }
@@ -167,7 +187,8 @@ public final class TriggerInstaller {
                 return ctx -> System.out.println(msg);
             }
             case "noop" -> {
-                return ctx -> {};
+                return ctx -> {
+                };
             }
             default -> {
                 final String typeForMsg = normalizedType; // capture a final

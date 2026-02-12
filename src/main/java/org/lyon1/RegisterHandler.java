@@ -1,6 +1,5 @@
 package org.lyon1;
 
-
 import org.lyon1.trigger.*;
 import org.neo4j.dbms.api.DatabaseManagementService;
 import org.neo4j.graphdb.event.TransactionEventListener;
@@ -37,35 +36,34 @@ public final class RegisterHandler {
     private volatile TransactionEventListener<?> listener;
     private final AtomicBoolean registered = new AtomicBoolean(false);
     private volatile String registeredDb = null;
-    private TriggerRegistryFactory trFactory;
 
     public RegisterHandler(@Context DatabaseManagementService dbms, @Context Log log) {
         this.dbms = dbms;
         this.neoLog = log;
-        this .trFactory = new TriggerRegistryFactory();
-
     }
 
     /** Register the transaction listener (idempotent). */
-    @POST @Path("/register")
+    @POST
+    @Path("/register")
     public Response register(@QueryParam("db") @DefaultValue(DEFAULT_DATABASE_NAME) String dbName,
-                             @QueryParam("type") @DefaultValue("AUTOMATON") String type) {
+            @QueryParam("type") @DefaultValue("AUTOMATON") String type,
+            @QueryParam("config") String configPath) {
         try {
             if (registered.get()) {
                 if (dbName.equals(registeredDb)) {
-                    return Response.ok(json(Map.of("status","already_registered","db",dbName))).build();
+                    return Response.ok(json(Map.of("status", "already_registered", "db", dbName))).build();
                 }
                 return Response.status(Response.Status.CONFLICT)
-                        .entity(json(Map.of("error","listener already registered on db " + registeredDb))).build();
+                        .entity(json(Map.of("error", "listener already registered on db " + registeredDb))).build();
             }
 
-            if(type.equals("AUTOMATON")) {
+            if (type.equals("AUTOMATON")) {
                 // 1) Create the registry & orchestrator
-                this.registry = trFactory.create(TriggerType.AUTOMATON, dbms);
+                this.registry = TriggerRegistryFactory.create(TriggerType.AUTOMATON, dbms);
 
             } else {
                 // Fallback to basic registry/orchestrator
-                this.registry = trFactory.create(TriggerType.INDEX, dbms);
+                this.registry = TriggerRegistryFactory.create(TriggerType.INDEX, dbms);
 
             }
 
@@ -84,22 +82,21 @@ public final class RegisterHandler {
             registeredDb = dbName;
             registered.set(true);
 
-
-            // inside your /register endpoint, after successful registration:
-            try {
-                TriggerInstaller installer = new TriggerInstaller(orchestrator, neoLog);
-                // load from a resource on the classpath, or a file path:
-                // try (InputStream in = getClass().getResourceAsStream("/triggers.yaml")) { ... }
-                installer.installFromYaml(Paths.get("/Users/amedeo/Downloads/neo4j-community-2025.05.0/conf/triggers.yaml"));
-            } catch (Exception ex) {
-                neoLog.warn(ex.getMessage());
-                neoLog.warn("Failed to install YAML triggers: {}", ex.getMessage());
+            // If configPath is provided, install triggers from it
+            if (configPath != null && !configPath.isBlank()) {
+                try {
+                    TriggerInstaller installer = new TriggerInstaller(orchestrator, neoLog);
+                    installer.installFromYaml(Paths.get(configPath));
+                    neoLog.info("Installed YAML triggers from {}", configPath);
+                } catch (Exception ex) {
+                    neoLog.warn("Failed to install YAML triggers from {}: {}", configPath, ex.getMessage());
+                }
             }
 
             neoLog.info("Registered listener on db '{}'", dbName);
             LOG.info("Registered listener on db '{}'", dbName);
 
-            return Response.ok(json(Map.of("status","registered","db",dbName))).build();
+            return Response.ok(json(Map.of("status", "registered", "db", dbName))).build();
         } catch (Exception e) {
             LOG.error("Failed to register listener", e);
             neoLog.error("Failed to register listener: " + e.getMessage(), e);
@@ -109,9 +106,11 @@ public final class RegisterHandler {
     }
 
     /** Unregister (idempotent). */
-    @DELETE @Path("/register")
+    @DELETE
+    @Path("/register")
     public Response unregister() {
-        if (!registered.get()) return Response.ok(json(Map.of("status","not_registered"))).build();
+        if (!registered.get())
+            return Response.ok(json(Map.of("status", "not_registered"))).build();
         try {
             dbms.unregisterTransactionEventListener(registeredDb, listener);
             String db = registeredDb;
@@ -119,7 +118,7 @@ public final class RegisterHandler {
             listener = null;
             registeredDb = null;
             neoLog.info("Unregistered listener from db '{}'", db);
-            return Response.ok(json(Map.of("status","unregistered","db",db))).build();
+            return Response.ok(json(Map.of("status", "unregistered", "db", db))).build();
         } catch (Exception e) {
             LOG.error("Failed to unregister listener", e);
             neoLog.error("Failed to unregister listener: " + e.getMessage(), e);
@@ -129,20 +128,25 @@ public final class RegisterHandler {
     }
 
     /** Status. */
-    @GET @Path("/status")
+    @GET
+    @Path("/status")
     public Response status() {
         return registered.get()
-                ? Response.ok(json(Map.of("registered",true,"db",registeredDb))).build()
-                : Response.ok(json(Map.of("registered",false))).build();
+                ? Response.ok(json(Map.of("registered", true, "db", registeredDb))).build()
+                : Response.ok(json(Map.of("registered", false))).build();
     }
 
-    /* ---------------- Optional: quick demo endpoint to add a trigger ---------------- */
+    /*
+     * ---------------- Optional: quick demo endpoint to add a trigger
+     * ----------------
+     */
 
     // Example payload (very simple):
     // { "label": "Person", "event": "ON_CREATE", "priority": 10 }
-    @POST @Path("/add")
+    @POST
+    @Path("/add")
     @Consumes(MediaType.APPLICATION_JSON)
-    public Response add(Map<String,Object> body) {
+    public Response add(Map<String, Object> body) {
         String label = String.valueOf(body.getOrDefault("label", "Person"));
         String event = String.valueOf(body.getOrDefault("event", "ON_CREATE"));
         int priority = ((Number) body.getOrDefault("priority", 100)).intValue();
@@ -160,23 +164,22 @@ public final class RegisterHandler {
                         priority,
                         true,
                         ctx -> true,
-                        committed -> neoLog.info("Trigger '{}' fired for label={}", "node-"+label, label),
+                        committed -> neoLog.info("Trigger '{}' fired for label={}", "node-" + label, label),
                         TriggerRegistryInterface.Time.AFTER_COMMIT,
-                        0
-                )
-        );
+                        0));
 
-        return Response.ok(json(Map.of("status","added","id",id))).build();
+        return Response.ok(json(Map.of("status", "added", "id", id))).build();
     }
 
     /* ---------------- Utils ---------------- */
 
-    private static String json(Map<?,?> m) {
+    private static String json(Map<?, ?> m) {
         // tiny JSON builder; replace with ObjectMapper if you prefer
         StringBuilder sb = new StringBuilder("{");
         boolean first = true;
         for (var e : m.entrySet()) {
-            if (!first) sb.append(',');
+            if (!first)
+                sb.append(',');
             first = false;
             sb.append('"').append(escape(String.valueOf(e.getKey()))).append('"').append(':');
             Object v = e.getValue();
@@ -188,5 +191,8 @@ public final class RegisterHandler {
         }
         return sb.append('}').toString();
     }
-    private static String escape(String s) { return s.replace("\"","\\\""); }
+
+    private static String escape(String s) {
+        return s.replace("\"", "\\\"");
+    }
 }
