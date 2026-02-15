@@ -1,57 +1,75 @@
 package org.lyon1.trigger;
 
-
 import java.util.Map;
 import java.util.Set;
 
 import java.util.*;
+import org.neo4j.graphdb.Transaction;
 import java.util.function.Consumer;
 
 /**
- * Thread-safe catalog of triggers with inverted indexes for fast candidate lookup.
+ * Thread-safe catalog of triggers with inverted indexes for fast candidate
+ * lookup.
  * Typical usage:
- *   - Writers/builders construct a new registry state (copy-on-write) and swap it in one shot.
- *   - Readers (Tx listeners) grab a read-only Snapshot once per tx and use IndexView to find candidates.
+ * - Writers/builders construct a new registry state (copy-on-write) and swap it
+ * in one shot.
+ * - Readers (Tx listeners) grab a read-only Snapshot once per tx and use
+ * IndexView to find candidates.
  *
  * Contract:
- *   - Implementations MUST be safe for concurrent reads and occasional writes.
- *   - Snapshots and the maps they expose MUST be immutable (unmodifiable).
- *   - version() MUST strictly increase on any structural change visible to readers.
+ * - Implementations MUST be safe for concurrent reads and occasional writes.
+ * - Snapshots and the maps they expose MUST be immutable (unmodifiable).
+ * - version() MUST strictly increase on any structural change visible to
+ * readers.
  */
 public interface TriggerRegistryInterface {
 
     /* ======== Core model types expected to exist in your codebase ======== */
-    enum EventType { ON_CREATE, ON_DELETE }
-    enum Scope { NODE, RELATIONSHIP, PATH }
-    enum Time { BEFORE_COMMIT, AFTER_COMMIT }
+    enum EventType {
+        ON_CREATE, ON_DELETE
+    }
 
-    sealed interface Activation permits NodeActivation, RelActivation, PathActivation {}
+    enum Scope {
+        NODE, RELATIONSHIP, PATH
+    }
+
+    enum Time {
+        BEFORE_COMMIT, AFTER_COMMIT
+    }
+
+    sealed interface Activation permits NodeActivation, RelActivation, PathActivation {
+    }
 
     record NodeActivation(Set<String> anyOfLabels,
-                          Map<String,Object> propertyEq,
-                          EventType eventType) implements Activation {}
+            Map<String, Object> propertyEq,
+            EventType eventType) implements Activation {
+    }
 
     record RelActivation(String type,
-                         Set<String> startLabels,
-                         Set<String> endLabels,
-                         EventType eventType) implements Activation {}
+            Set<String> startLabels,
+            Set<String> endLabels,
+            EventType eventType) implements Activation {
+    }
 
     record PathActivation(String canonicalSignature,
-                          int maxLen,
-                          EventType eventType) implements Activation {}
+            int maxLen,
+            EventType eventType) implements Activation {
+    }
 
     record Trigger(String id,
-                   Scope scope,
-                   Activation activation,
-                   int priority,
-                   int order,
-                   Time time,
-                   boolean enabled) {}
+            Scope scope,
+            Activation activation,
+            int priority,
+            int order,
+            Time time,
+            boolean enabled) {
+    }
 
     /* ======================= Lifecycle / mutation ======================= */
 
     /**
-     * @return monotonically increasing registry version; bumps on any visible change.
+     * @return monotonically increasing registry version; bumps on any visible
+     *         change.
      */
     long version();
 
@@ -80,7 +98,8 @@ public interface TriggerRegistryInterface {
     boolean unregister(String triggerId);
 
     /**
-     * Atomically replace entire registry contents with the provided triggers (copy-on-write swap).
+     * Atomically replace entire registry contents with the provided triggers
+     * (copy-on-write swap).
      * MUST bump version if the new set differs from current.
      */
     void replaceAll(Collection<Trigger> triggers);
@@ -96,15 +115,19 @@ public interface TriggerRegistryInterface {
      * Lightweight query helpers (read ops do NOT mutate version).
      */
     Optional<Trigger> get(String triggerId);
+
     boolean contains(String triggerId);
+
     List<Trigger> list(); // unmodifiable copy, consistent with current version
 
     /**
      * Subscribe to version changes (e.g., for metrics, hot caches).
-     * Implementations may deliver callbacks asynchronously. The callback MUST be invoked
+     * Implementations may deliver callbacks asynchronously. The callback MUST be
+     * invoked
      * AFTER the new state becomes visible to readers.
      */
     void addListener(Consumer<Snapshot> onVersionChange);
+
     void removeListener(Consumer<Snapshot> onVersionChange);
 
     /* ======================== Candidate convenience ===================== */
@@ -130,7 +153,8 @@ public interface TriggerRegistryInterface {
 
     /**
      * A frozen, immutable view of the registry at a specific version.
-     * All collections returned by Snapshot (directly or via IndexView) MUST be unmodifiable.
+     * All collections returned by Snapshot (directly or via IndexView) MUST be
+     * unmodifiable.
      */
     interface Snapshot {
         long version();
@@ -151,14 +175,11 @@ public interface TriggerRegistryInterface {
         }
     }
 
+    interface PathMonitor {
 
-     interface PathMonitor {
-
-        Set<String> findMatchingTriggers(String canonicalSignature);
+        Set<String> findMatchingTriggers(Transaction tx, String canonicalSignature);
 
     }
-
-
 
     /**
      * Read-only inverted indexes (feature → trigger IDs).
@@ -170,6 +191,7 @@ public interface TriggerRegistryInterface {
          * Keys are label names EXACT as stored in Neo4j (case-sensitive).
          */
         Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> nodeIndex();
+
         /**
          * Relationship type → trigger IDs (for RelActivation).
          */

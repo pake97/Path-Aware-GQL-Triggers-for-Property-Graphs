@@ -10,16 +10,14 @@ import java.util.regex.Pattern;
 
 public class PatternParser {
 
-
     public static GraphPath parsePattern(String input) {
         // Strip optional "Given " prefix and spaces
         input = input.trim();
 
-
         List<GraphElement> elements = new ArrayList<>();
 
-        // Node: (a:Friend) -> variable=a, label=Friend
-        Pattern nodePattern = Pattern.compile("\\((\\w+):(\\w+)\\)");
+        // Node: (a:Friend) or (:Friend) or (Friend) -> label=Friend
+        Pattern nodePattern = Pattern.compile("\\((?:(\\w+))?:?(\\w+)\\)");
         Matcher nodeMatcher = nodePattern.matcher(input);
         while (nodeMatcher.find()) {
             String label = nodeMatcher.group(2);
@@ -32,7 +30,7 @@ public class PatternParser {
         while (edgeMatcher.find()) {
             String type = edgeMatcher.group(1);
             int pos = edgeMatcher.start();
-            elements.add(new GraphElement(nodeMatcher.start(), type, ElementType.RELATIONSHIP, pos));
+            elements.add(new GraphElement(edgeMatcher.start(), type, ElementType.RELATIONSHIP, pos));
         }
 
         // Sort by original position to keep correct order
@@ -40,6 +38,5 @@ public class PatternParser {
         return new GraphPath(elements);
 
     }
-
 
 }

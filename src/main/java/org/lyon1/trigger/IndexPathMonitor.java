@@ -11,11 +11,11 @@ import java.util.Set;
 
 public final class IndexPathMonitor implements TriggerRegistryInterface.PathMonitor {
 
-    private final Map<String,TriggerMachine> machines;
+    private final Map<String, TriggerMachine> machines;
 
     private IndexPathMonitor(List<TriggerMachine> triggerMachines) {
-        Map<String,TriggerMachine> machines = new java.util.HashMap<>();
-        for(TriggerMachine machine : triggerMachines) {
+        Map<String, TriggerMachine> machines = new java.util.HashMap<>();
+        for (TriggerMachine machine : triggerMachines) {
             machines.put(machine.getTriggerId(), machine);
         }
         this.machines = Map.copyOf(machines);
@@ -25,12 +25,11 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
         return new IndexPathMonitor(triggerMachines);
     }
 
-    public Set<String> findMatchingTriggers(String indexChange) {
+    @Override
+    public Set<String> findMatchingTriggers(org.neo4j.graphdb.Transaction tx, String indexChange) {
         // Implement your logic to find matching triggers based on index changes
         return Set.of();
     }
-
-
 
     static class TriggerMachine {
 
@@ -42,9 +41,9 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
         final Set<String> acceptingStates;
 
         TriggerMachine(String triggerId,
-                       Automaton automaton,
-                       Set<String> initialStates,
-                       Set<String> acceptingStates
+                Automaton automaton,
+                Set<String> initialStates,
+                Set<String> acceptingStates
 
         ) {
             this.triggerId = triggerId;
@@ -57,7 +56,6 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
         public String getTriggerId() {
             return triggerId;
         }
-
 
         public Automaton getAutomaton() {
             return automaton;

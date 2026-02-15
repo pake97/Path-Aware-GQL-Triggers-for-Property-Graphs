@@ -6,13 +6,14 @@ import org.lyon1.automaton.StateType;
 import org.lyon1.path.GraphElement;
 import org.lyon1.path.GraphPath;
 import org.neo4j.dbms.api.DatabaseManagementService;
+import org.neo4j.logging.Log;
 
 import java.util.*;
 
 public final class IndexTriggerRegistry extends TriggerRegistry {
 
-    public IndexTriggerRegistry(DatabaseManagementService dbms) {
-        super(dbms);
+    public IndexTriggerRegistry(DatabaseManagementService dbms, Log log) {
+        super(dbms, log);
     }
 
     @Override

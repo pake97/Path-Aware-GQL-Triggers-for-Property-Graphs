@@ -59,11 +59,11 @@ public final class RegisterHandler {
 
             if (type.equals("AUTOMATON")) {
                 // 1) Create the registry & orchestrator
-                this.registry = TriggerRegistryFactory.create(TriggerType.AUTOMATON, dbms);
+                this.registry = TriggerRegistryFactory.create(TriggerType.AUTOMATON, dbms, neoLog);
 
             } else {
                 // Fallback to basic registry/orchestrator
-                this.registry = TriggerRegistryFactory.create(TriggerType.INDEX, dbms);
+                this.registry = TriggerRegistryFactory.create(TriggerType.INDEX, dbms, neoLog);
 
             }
 

@@ -7,22 +7,23 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import org.neo4j.logging.Log;
+
 public abstract class TriggerRegistry implements TriggerRegistryInterface {
 
-
-    final DatabaseManagementService dbms;
+    protected final DatabaseManagementService dbms;
+    protected final Log neoLog;
     /* ---------- Internal state ---------- */
 
     private static final class State {
         final long version;
-        final Map<String, Trigger> byId;            // unmodifiable
-        final IndexViewImpl indexView;              // unmodifiable sets inside
+        final Map<String, Trigger> byId; // unmodifiable
+        final IndexViewImpl indexView; // unmodifiable sets inside
         final SnapshotImpl snapshot;
 
-
         State(long version,
-              Map<String, Trigger> byId,
-              IndexViewImpl indexView) {
+                Map<String, Trigger> byId,
+                IndexViewImpl indexView) {
             this.version = version;
             this.byId = byId;
             this.indexView = indexView;
@@ -33,13 +34,13 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
     private final AtomicReference<State> ref;
     private final CopyOnWriteArrayList<Consumer<Snapshot>> listeners = new CopyOnWriteArrayList<>();
 
-    public TriggerRegistry(DatabaseManagementService dbms) {
+    public TriggerRegistry(DatabaseManagementService dbms, Log log) {
         this.dbms = dbms;
+        this.neoLog = log;
         this.ref = new AtomicReference<>(new State(
                 0L,
                 Collections.unmodifiableMap(new LinkedHashMap<>()),
-                IndexViewImpl.empty()
-        ));
+                IndexViewImpl.empty()));
     }
 
     /* ---------- TriggerRegistry ---------- */
@@ -63,12 +64,12 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
                 trigger.priority(),
                 trigger.order(),
                 trigger.time(),
-                trigger.enabled()
-        );
+                trigger.enabled());
 
         State before = ref.get();
         if (before.byId.containsKey(id)) {
-            // Upsert semantics? The interface says "register" should add; if exists, we replace.
+            // Upsert semantics? The interface says "register" should add; if exists, we
+            // replace.
             // Change to error if you prefer strict "must be new".
         }
 
@@ -78,8 +79,7 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         State after = new State(
                 before.version + 1,
                 Collections.unmodifiableMap(nextById),
-                buildIndexes(nextById.values())
-        );
+                buildIndexes(nextById.values()));
 
         ref.set(after);
         notifyListeners(after.snapshot);
@@ -90,10 +90,12 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
     public boolean replace(Trigger trigger) {
         Objects.requireNonNull(trigger, "trigger");
         String id = trigger.id();
-        if (id == null || id.isBlank()) return false;
+        if (id == null || id.isBlank())
+            return false;
 
         State before = ref.get();
-        if (!before.byId.containsKey(id)) return false;
+        if (!before.byId.containsKey(id))
+            return false;
 
         Trigger normalized = new Trigger(
                 id,
@@ -102,8 +104,7 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
                 trigger.priority(),
                 trigger.order(),
                 trigger.time(),
-                trigger.enabled()
-        );
+                trigger.enabled());
 
         Map<String, Trigger> nextById = new LinkedHashMap<>(before.byId);
         nextById.put(id, normalized);
@@ -111,8 +112,7 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         State after = new State(
                 before.version + 1,
                 Collections.unmodifiableMap(nextById),
-                buildIndexes(nextById.values())
-        );
+                buildIndexes(nextById.values()));
 
         ref.set(after);
         notifyListeners(after.snapshot);
@@ -124,11 +124,11 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         Objects.requireNonNull(triggerId, "triggerId");
         State before = ref.get();
         Trigger cur = before.byId.get(triggerId);
-        if (cur == null || cur.enabled() == enabled) return false;
+        if (cur == null || cur.enabled() == enabled)
+            return false;
 
         Trigger updated = new Trigger(
-                cur.id(), cur.scope(), cur.activation(), cur.priority(), cur.order(), cur.time(), enabled
-        );
+                cur.id(), cur.scope(), cur.activation(), cur.priority(), cur.order(), cur.time(), enabled);
 
         Map<String, Trigger> nextById = new LinkedHashMap<>(before.byId);
         nextById.put(triggerId, updated);
@@ -136,8 +136,7 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         State after = new State(
                 before.version + 1,
                 Collections.unmodifiableMap(nextById),
-                buildIndexes(nextById.values())
-        );
+                buildIndexes(nextById.values()));
 
         ref.set(after);
         notifyListeners(after.snapshot);
@@ -148,7 +147,8 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
     public boolean unregister(String triggerId) {
         Objects.requireNonNull(triggerId, "triggerId");
         State before = ref.get();
-        if (!before.byId.containsKey(triggerId)) return false;
+        if (!before.byId.containsKey(triggerId))
+            return false;
 
         Map<String, Trigger> nextById = new LinkedHashMap<>(before.byId);
         nextById.remove(triggerId);
@@ -156,8 +156,7 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         State after = new State(
                 before.version + 1,
                 Collections.unmodifiableMap(nextById),
-                buildIndexes(nextById.values())
-        );
+                buildIndexes(nextById.values()));
 
         ref.set(after);
         notifyListeners(after.snapshot);
@@ -169,21 +168,23 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         Objects.requireNonNull(triggers, "triggers");
         Map<String, Trigger> nextById = new LinkedHashMap<>();
         for (Trigger t : triggers) {
-            if (t == null) continue;
+            if (t == null)
+                continue;
             String id = (t.id() != null && !t.id().isBlank()) ? t.id() : UUID.randomUUID().toString();
-            nextById.put(id, new Trigger(id, t.scope(), t.activation(), t.priority(), t.order(),t.time(), t.enabled()));
+            nextById.put(id,
+                    new Trigger(id, t.scope(), t.activation(), t.priority(), t.order(), t.time(), t.enabled()));
         }
 
         State before = ref.get();
         // bump version only if content differs
         boolean differs = !before.byId.equals(nextById);
-        if (!differs) return;
+        if (!differs)
+            return;
 
         State after = new State(
                 before.version + 1,
                 Collections.unmodifiableMap(nextById),
-                buildIndexes(nextById.values())
-        );
+                buildIndexes(nextById.values()));
 
         ref.set(after);
         notifyListeners(after.snapshot);
@@ -211,22 +212,22 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
 
     @Override
     public void addListener(Consumer<Snapshot> onVersionChange) {
-        if (onVersionChange != null) listeners.add(onVersionChange);
+        if (onVersionChange != null)
+            listeners.add(onVersionChange);
     }
 
     @Override
     public void removeListener(Consumer<Snapshot> onVersionChange) {
-        if (onVersionChange != null) listeners.remove(onVersionChange);
+        if (onVersionChange != null)
+            listeners.remove(onVersionChange);
     }
-
-
 
     public Set<String> candidatesForNode(EventType eventType, Iterable<String> labels) {
         Snapshot s = snapshot();
         IndexView ix = s.indexView();
         Map<String, Set<String>> eventActivations = ix.nodeIndex().getOrDefault(eventType, Map.of());
         Set<String> out = new LinkedHashSet<>();
-        if( eventActivations.isEmpty()) {
+        if (eventActivations.isEmpty()) {
             return Set.of();
         }
         for (String lbl : labels) {
@@ -243,14 +244,12 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         IndexView ix = s.indexView();
         Map<String, Set<String>> eventActivations = ix.relIndex().getOrDefault(eventType, Map.of());
         Set<String> out = new LinkedHashSet<>();
-        if (eventActivations.isEmpty())
-        {
+        if (eventActivations.isEmpty()) {
             return Set.of();
         }
         out.addAll(eventActivations.getOrDefault(relType, Set.of()));
         return out;
     }
-
 
     /* ---------- Snapshot & IndexView implementations ---------- */
 
@@ -265,9 +264,20 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
             this.indexView = indexView;
         }
 
-        @Override public long version() { return version; }
-        @Override public Map<String, Trigger> byId() { return byId; }
-        @Override public IndexView indexView() { return indexView; }
+        @Override
+        public long version() {
+            return version;
+        }
+
+        @Override
+        public Map<String, Trigger> byId() {
+            return byId;
+        }
+
+        @Override
+        public IndexView indexView() {
+            return indexView;
+        }
     }
 
     private static final class IndexViewImpl implements IndexView {
@@ -278,8 +288,7 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         private IndexViewImpl(
                 Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> nodeIndex,
                 Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> relIndex,
-                PathMonitor pathMonitor
-        ) {
+                PathMonitor pathMonitor) {
             this.nodeIndex = nodeIndex;
             this.relIndex = relIndex;
             this.pathMonitor = pathMonitor;
@@ -289,27 +298,35 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
             return new IndexViewImpl(
                     Collections.unmodifiableMap(new HashMap<>()),
                     Collections.unmodifiableMap(new HashMap<>()),
-                    new EmptyPathMonitor()
-            );
+                    new EmptyPathMonitor());
         }
 
-        @Override public Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> nodeIndex() { return nodeIndex; }
-        @Override public Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> relIndex() { return relIndex; }
-        @Override public PathMonitor pathMonitor() { return pathMonitor; }
+        @Override
+        public Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> nodeIndex() {
+            return nodeIndex;
+        }
+
+        @Override
+        public Map<TriggerRegistryInterface.EventType, Map<String, Set<String>>> relIndex() {
+            return relIndex;
+        }
+
+        @Override
+        public PathMonitor pathMonitor() {
+            return pathMonitor;
+        }
 
     }
-
 
     // trivial implementation
     private static final class EmptyPathMonitor implements PathMonitor {
 
         @Override
-        public Set<String> findMatchingTriggers(String canonicalSignature) {
+        public Set<String> findMatchingTriggers(org.neo4j.graphdb.Transaction tx, String canonicalSignature) {
             return Set.of();
         }
 
     }
-
 
     protected abstract PathMonitor buildPathMonitor(Collection<TriggerRegistry.Trigger> triggers);
 
@@ -317,11 +334,11 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
 
     protected IndexViewImpl buildIndexes(Collection<TriggerRegistry.Trigger> triggers) {
         Map<EventType, Map<String, Set<String>>> nodeIndex = new HashMap<>();
-        Map<EventType, Map<String, Set<String>>> relIndex  = new HashMap<>();
-        Map<String, Set<String>> createEventMapNodes      = new HashMap<>();
-        Map<String, Set<String>> createEventMapRel        = new HashMap<>();
-        Map<String, Set<String>> deleteEventMapNode       = new HashMap<>();
-        Map<String, Set<String>> deleteEventMapRel        = new HashMap<>();
+        Map<EventType, Map<String, Set<String>>> relIndex = new HashMap<>();
+        Map<String, Set<String>> createEventMapNodes = new HashMap<>();
+        Map<String, Set<String>> createEventMapRel = new HashMap<>();
+        Map<String, Set<String>> deleteEventMapNode = new HashMap<>();
+        Map<String, Set<String>> deleteEventMapRel = new HashMap<>();
 
         nodeIndex.put(EventType.ON_DELETE, deleteEventMapNode);
         nodeIndex.put(EventType.ON_CREATE, createEventMapNodes);
@@ -329,8 +346,9 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         relIndex.put(EventType.ON_CREATE, createEventMapRel);
 
         for (Trigger t : triggers) {
-            if (t == null) continue;
-            String id   = t.id();
+            if (t == null)
+                continue;
+            String id = t.id();
             Scope scope = t.scope();
             Activation act = t.activation();
 
@@ -358,10 +376,8 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         return new IndexViewImpl(
                 freezeMapMap(nodeIndex),
                 freezeMapMap(relIndex),
-                pathMonitor
-        );
+                pathMonitor);
     }
-
 
     private static <K> void add(Map<K, Set<String>> map, K key, String id) {
         map.computeIfAbsent(key, k -> new LinkedHashSet<>()).add(id);
@@ -393,13 +409,12 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
         return Collections.unmodifiableMap(out);
     }
 
-
-
-
     private void notifyListeners(Snapshot snap) {
         for (Consumer<Snapshot> c : listeners) {
-            try { c.accept(snap); } catch (Exception ignore) { /* don't break others */ }
+            try {
+                c.accept(snap);
+            } catch (Exception ignore) {
+                /* don't break others */ }
         }
     }
 }
-

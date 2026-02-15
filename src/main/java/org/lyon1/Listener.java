@@ -10,13 +10,11 @@ import org.lyon1.trigger.CommittedContext;
 import java.util.stream.Stream;
 
 import org.lyon1.trigger.*;
-import org.lyon1.trigger.transition.TransitionTable;
 import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.event.LabelEntry;
 import org.neo4j.graphdb.event.TransactionData;
 import org.neo4j.graphdb.event.TransactionEventListener;
 import org.neo4j.logging.Log;
-
 
 public class Listener implements TransactionEventListener<List<Listener.PlannedTrigger>> {
 
@@ -27,12 +25,9 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         this.logger = logger;
     }
 
-
     private TriggerRegistryInterface registry;
     private InMemoryOrchestrator orchestrator;
     private Log log;
-
-
 
     public Listener(Log log, InMemoryOrchestrator orchestrator, TriggerRegistryInterface registry) {
         this.log = log;
@@ -40,25 +35,25 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         this.registry = registry;
     }
 
-
     @Override
-    public List<PlannedTrigger> beforeCommit(TransactionData data, Transaction tx, GraphDatabaseService db) throws Exception {
+    public List<PlannedTrigger> beforeCommit(TransactionData data, Transaction tx, GraphDatabaseService db)
+            throws Exception {
         final TriggerRegistryInterface.Snapshot snap = registry.snapshot();
 
-        TransitionTable transitions = new TransitionTable(data);
-        //log.info("Snap : " + snap.toString());
+        // log.info("Snap : " + snap.toString());
         final TriggerRegistryInterface.IndexView ix = snap.indexView();
-        //log.info("IndexView : " + ix.toString());
+        // log.info("IndexView : " + ix.toString());
         // 1) Collect label sets for created and (pre-)deleted nodes
         final Map<String, Set<String>> createdNodeLabels = new HashMap<>(16);
 
         for (Node n : data.createdNodes()) {
-            //log.info("Created : " + n.getLabels().toString());
+            // log.info("Created : " + n.getLabels().toString());
             createdNodeLabels.put(n.getElementId(), labelsOf(n));
 
         }
 
-        // For deleted nodes we can't read labels off the Node; reconstruct from removedLabels() events
+        // For deleted nodes we can't read labels off the Node; reconstruct from
+        // removedLabels() events
         final Map<String, Set<String>> deletedNodeLabels = preDeleteLabels(data);
 
         // 2) Relationship types for created/deleted rels
@@ -72,88 +67,104 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         }
 
         // 3) Candidate IDs via indexes
-        //final Set<String> nodeCandidateIds = new LinkedHashSet<>(32);
+        // final Set<String> nodeCandidateIds = new LinkedHashSet<>(32);
         final List<String> nodeCandidateIds = new ArrayList<>();
 
         // Node creates
         if (!createdNodeLabels.isEmpty()) {
-            //final Set<String> globalCreate = ix.globalNode().getOrDefault(TriggerRegistry.EventType.ON_CREATE, Set.of());
+            // final Set<String> globalCreate =
+            // ix.globalNode().getOrDefault(TriggerRegistry.EventType.ON_CREATE, Set.of());
 
-            //nodeCandidateIds.addAll(globalCreate);
+            // nodeCandidateIds.addAll(globalCreate);
             for (Set<String> labels : createdNodeLabels.values()) {
-                //for (String lbl : labels) {
-                    nodeCandidateIds.addAll(this.registry.candidatesForNode(TriggerRegistryInterface.EventType.ON_CREATE, labels));
-                    //prima era così :
-                    //nodeCandidateIds.addAll(ix.nodeLabel().getOrDefault(lbl, Set.of()));
-                //}
+                // for (String lbl : labels) {
+                nodeCandidateIds
+                        .addAll(this.registry.candidatesForNode(TriggerRegistryInterface.EventType.ON_CREATE, labels));
+                // prima era così :
+                // nodeCandidateIds.addAll(ix.nodeLabel().getOrDefault(lbl, Set.of()));
+                // }
             }
         }
         // Node deletes
         if (!deletedNodeLabels.isEmpty()) {
-            //final Set<String> globalDelete = ix.globalNode().getOrDefault(TriggerRegistry.EventType.ON_DELETE, Set.of());
-            //nodeCandidateIds.addAll(globalDelete);
+            // final Set<String> globalDelete =
+            // ix.globalNode().getOrDefault(TriggerRegistry.EventType.ON_DELETE, Set.of());
+            // nodeCandidateIds.addAll(globalDelete);
             for (Set<String> labels : deletedNodeLabels.values()) {
 
-                        nodeCandidateIds.addAll(this.registry.candidatesForNode(TriggerRegistryInterface.EventType.ON_DELETE, labels));
-//                    nodeCandidateIds.addAll(ix.nodeLabel().getOrDefault(lbl, Set.of()));
+                nodeCandidateIds
+                        .addAll(this.registry.candidatesForNode(TriggerRegistryInterface.EventType.ON_DELETE, labels));
+                // nodeCandidateIds.addAll(ix.nodeLabel().getOrDefault(lbl, Set.of()));
 
             }
         }
 
-        //final Set<String> relCandidateIds = new LinkedHashSet<>(32);
+        // final Set<String> relCandidateIds = new LinkedHashSet<>(32);
         final List<String> relCandidateIds = new ArrayList<>();
         // Rel creates
         if (!createdRelTypes.isEmpty()) {
-//            relCandidateIds.addAll(ix.globalRel().getOrDefault(TriggerRegistry.EventType.ON_CREATE, Set.of()));
+            // relCandidateIds.addAll(ix.globalRel().getOrDefault(TriggerRegistry.EventType.ON_CREATE,
+            // Set.of()));
             for (String type : createdRelTypes.values()) {
-                relCandidateIds.addAll(this.registry.candidatesForRelationship(TriggerRegistryInterface.EventType.ON_CREATE, type));
+                relCandidateIds.addAll(
+                        this.registry.candidatesForRelationship(TriggerRegistryInterface.EventType.ON_CREATE, type));
             }
         }
         // Rel deletes
         if (!deletedRelTypes.isEmpty()) {
-            //relCandidateIds.addAll(ix.globalRel().getOrDefault(TriggerRegistry.EventType.ON_DELETE, Set.of()));
+            // relCandidateIds.addAll(ix.globalRel().getOrDefault(TriggerRegistry.EventType.ON_DELETE,
+            // Set.of()));
             for (String type : deletedRelTypes.values()) {
-//                relCandidateIds.addAll(ix.relType().getOrDefault(type, Set.of()));
-                relCandidateIds.addAll(this.registry.candidatesForRelationship(TriggerRegistryInterface.EventType.ON_DELETE, type));
+                // relCandidateIds.addAll(ix.relType().getOrDefault(type, Set.of()));
+                relCandidateIds.addAll(
+                        this.registry.candidatesForRelationship(TriggerRegistryInterface.EventType.ON_DELETE, type));
             }
         }
 
-
         // 4) Path candidates (via your matcher)
-//        final Set<String> pathSigs = pathMatcher.findCanonicalSignatures(data, db);
-//
-//        final Set<String> pathCandidateIds = new LinkedHashSet<>(16);
-//        for (String sig : pathSigs) {
-//            pathCandidateIds.addAll(ix.pathSignature().getOrDefault(sig, Set.of()));
-//        }
+        final List<String> pathCandidateIds = new ArrayList<>();
+
+        // Check for node changes
+        for (Node n : data.createdNodes()) {
+            pathCandidateIds.addAll(ix.pathMonitor().findMatchingTriggers(tx, "node:" + n.getElementId()));
+        }
+        for (Node n : data.deletedNodes()) {
+            pathCandidateIds.addAll(ix.pathMonitor().findMatchingTriggers(tx, "node:" + n.getElementId()));
+        }
+
+        // Check for relationship changes
+        for (Relationship r : data.createdRelationships()) {
+            pathCandidateIds.addAll(ix.pathMonitor().findMatchingTriggers(tx, "rel:" + r.getElementId()));
+        }
+        for (Relationship r : data.deletedRelationships()) {
+            pathCandidateIds.addAll(ix.pathMonitor().findMatchingTriggers(tx, "rel:" + r.getElementId()));
+        }
 
         log.info("Node candidates : " + nodeCandidateIds.toString() + " size : " + nodeCandidateIds.size());
         log.info("Rel candidates : " + relCandidateIds.toString() + " size : " + relCandidateIds.size());
-        //log.info("path candidates : " + pathCandidateIds.toString() + " size : " + pathCandidateIds.size());
+        log.info("path candidates : " + pathCandidateIds.toString() + " size : " + pathCandidateIds.size());
 
         // 5) De-dup IDs and load triggers (enabled only)
         // rewrite this : i don't need to de duplicate because i'm using lists not sets
 
         final Map<String, TriggerRegistryInterface.Trigger> byId = snap.byId();
-        final List<TriggerRegistryInterface.Trigger> candidates =
-                //Stream.of(nodeCandidateIds, relCandidateIds, pathCandidateIds)
-                Stream.of(nodeCandidateIds, relCandidateIds)
-                        .flatMap(Collection::stream)
-                        .map(byId::get)
-                        .filter(Objects::nonNull)
-                        .filter(TriggerRegistryInterface.Trigger::enabled)
-                        .collect(Collectors.toList());
+        final List<TriggerRegistryInterface.Trigger> candidates = Stream
+                .of(nodeCandidateIds, relCandidateIds, pathCandidateIds)
+                .flatMap(Collection::stream)
+                .map(byId::get)
+                .filter(Objects::nonNull)
+                .filter(TriggerRegistryInterface.Trigger::enabled)
+                .collect(Collectors.toList());
 
-
-//        final Map<String, TriggerRegistry.Trigger> byId = snap.byId();
-//        final List<TriggerRegistry.Trigger> candidates =
-//                Stream.of(nodeCandidateIds, relCandidateIds, pathCandidateIds)
-//                        .flatMap(Set::stream)
-//                        .distinct()
-//                        .map(byId::get)
-//                        .filter(Objects::nonNull)
-//                        .filter(TriggerRegistry.Trigger::enabled)
-//                        .collect(Collectors.toList());
+        // final Map<String, TriggerRegistry.Trigger> byId = snap.byId();
+        // final List<TriggerRegistry.Trigger> candidates =
+        // Stream.of(nodeCandidateIds, relCandidateIds, pathCandidateIds)
+        // .flatMap(Set::stream)
+        // .distinct()
+        // .map(byId::get)
+        // .filter(Objects::nonNull)
+        // .filter(TriggerRegistry.Trigger::enabled)
+        // .collect(Collectors.toList());
 
         if (candidates.isEmpty()) {
             return List.of(); // state passed downstream (cheap)
@@ -185,11 +196,11 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
                 .thenComparing(p -> p.trigger().order());
 
         List<PlannedTrigger> beforeCommit = new ArrayList<>();
-        List<PlannedTrigger> afterCommit  = new ArrayList<>();
-
+        List<PlannedTrigger> afterCommit = new ArrayList<>();
 
         for (PlannedTrigger p : planned) {
-            if (p.trigger().time() == TriggerRegistryInterface.Time.BEFORE_COMMIT) {  // adjust enum/type name if different
+            if (p.trigger().time() == TriggerRegistryInterface.Time.BEFORE_COMMIT) { // adjust enum/type name if
+                                                                                     // different
                 beforeCommit.add(p);
             } else if (p.trigger().time() == TriggerRegistryInterface.Time.AFTER_COMMIT) {
                 afterCommit.add(p);
@@ -199,11 +210,11 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
             }
         }
 
-// Sort both lists deterministically
+        // Sort both lists deterministically
         beforeCommit.sort(comparator);
         afterCommit.sort(comparator);
 
-        log.info("Planned triggers BEFORE COMMIT : " + beforeCommit.toString() );
+        log.info("Planned triggers BEFORE COMMIT : " + beforeCommit.toString());
 
         // 8) Execute BEFORE_COMMIT actions now
         for (PlannedTrigger p : beforeCommit) {
@@ -218,7 +229,8 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
 
     @Override
     public void afterCommit(TransactionData data, List<PlannedTrigger> planned, GraphDatabaseService db) {
-        if (planned == null || planned.isEmpty()) return;
+        if (planned == null || planned.isEmpty())
+            return;
         log.info("Planned triggers in AFTER COMMIT : " + planned.toString());
         for (PlannedTrigger p : planned) {
             try {
@@ -228,7 +240,8 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
                 p.action().accept(new CommittedContext(p.trigger(), data, db, p.dedupeKey()));
             } catch (Exception ex) {
                 // Do not throw; commit is done. Consider sending to a DLQ.
-                log.error("Trigger action failed id=" + p.trigger().id() + " key=" + p.dedupeKey() + ": " + ex.getMessage(), ex);
+                log.error("Trigger action failed id=" + p.trigger().id() + " key=" + p.dedupeKey() + ": "
+                        + ex.getMessage(), ex);
             }
         }
     }
@@ -238,7 +251,10 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         // Optionally log/metrics. No actions should run.
     }
 
-    /* -------------------------------- Predicate/Action glue -------------------------------- */
+    /*
+     * -------------------------------- Predicate/Action glue
+     * --------------------------------
+     */
 
     /**
      * Adapt your predicate storage to a Function here.
@@ -259,7 +275,10 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         };
     }
 
-    /* -------------------------------- Helper types -------------------------------- */
+    /*
+     * -------------------------------- Helper types
+     * --------------------------------
+     */
 
     /**
      * What we'll pass to afterCommit.
@@ -269,12 +288,12 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         private final String dedupeKey;
         private final Consumer<CommittedContext> action;
 
-        public PlannedTrigger(TriggerRegistryInterface.Trigger trigger, String dedupeKey, Consumer<CommittedContext> action) {
+        public PlannedTrigger(TriggerRegistryInterface.Trigger trigger, String dedupeKey,
+                Consumer<CommittedContext> action) {
             this.trigger = trigger;
             this.dedupeKey = dedupeKey;
             this.action = action;
         }
-
 
         public TriggerRegistryInterface.Trigger trigger() {
             return trigger;
@@ -294,15 +313,15 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         }
     }
 
-
-
-
-
-    /* -------------------------------- Private utilities -------------------------------- */
+    /*
+     * -------------------------------- Private utilities
+     * --------------------------------
+     */
 
     private static Set<String> labelsOf(Node n) {
         Set<String> out = new LinkedHashSet<>();
-        for (Label l : n.getLabels()) out.add(l.name());
+        for (Label l : n.getLabels())
+            out.add(l.name());
         return out;
     }
 
@@ -313,17 +332,14 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
     private static Map<String, Set<String>> preDeleteLabels(TransactionData data) {
         Map<String, Set<String>> map = new HashMap<>(16);
         Set<String> deletedIds = new HashSet<>();
-        for (Node n : data.deletedNodes()) deletedIds.add(n.getElementId());
+        for (Node n : data.deletedNodes())
+            deletedIds.add(n.getElementId());
         for (LabelEntry ev : data.removedLabels()) {
             String id = ev.node().getElementId();
-            if (!deletedIds.contains(id)) continue; // only deletions
+            if (!deletedIds.contains(id))
+                continue; // only deletions
             map.computeIfAbsent(id, k -> new LinkedHashSet<>()).add(ev.label().name());
         }
         return map;
     }
 }
-
-
-
-
-
