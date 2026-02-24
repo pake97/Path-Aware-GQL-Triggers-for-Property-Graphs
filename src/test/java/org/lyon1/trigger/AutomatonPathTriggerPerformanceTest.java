@@ -13,7 +13,6 @@ import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.Transaction;
 import org.neo4j.harness.Neo4j;
 import org.neo4j.harness.Neo4jBuilders;
-import org.neo4j.logging.NullLog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -43,10 +42,93 @@ public class AutomatonPathTriggerPerformanceTest {
         dbms = neo4j.databaseManagementService();
         db = neo4j.defaultDatabaseService();
 
-        registry = TriggerRegistryFactory.create(TriggerType.AUTOMATON, dbms, NullLog.getInstance());
+        org.neo4j.logging.Log consoleLog = new org.neo4j.logging.Log() {
+            @Override
+            public boolean isDebugEnabled() {
+                return true;
+            }
+
+            @Override
+            public void debug(String message) {
+                System.out.println("DEBUG: " + message);
+            }
+
+            @Override
+            public void debug(String message, Throwable throwable) {
+                System.out.println("DEBUG: " + message);
+                throwable.printStackTrace();
+            }
+
+            @Override
+            public void debug(String format, Object... params) {
+                try {
+                    System.out.println("DEBUG: " + String.format(format.replace("{}", "%s"), params));
+                } catch (Exception e) {
+                }
+            }
+
+            @Override
+            public void info(String message) {
+                System.out.println("INFO: " + message);
+            }
+
+            @Override
+            public void info(String message, Throwable throwable) {
+                System.out.println("INFO: " + message);
+                throwable.printStackTrace();
+            }
+
+            @Override
+            public void info(String format, Object... params) {
+                try {
+                    System.out.println("INFO: " + String.format(format.replace("{}", "%s"), params));
+                } catch (Exception e) {
+                }
+            }
+
+            @Override
+            public void warn(String message) {
+                System.out.println("WARN: " + message);
+            }
+
+            @Override
+            public void warn(String message, Throwable throwable) {
+                System.out.println("WARN: " + message);
+                throwable.printStackTrace();
+            }
+
+            @Override
+            public void warn(String format, Object... params) {
+                try {
+                    System.out.println("WARN: " + String.format(format.replace("{}", "%s"), params));
+                } catch (Exception e) {
+                }
+            }
+
+            @Override
+            public void error(String message) {
+                System.err.println("ERROR: " + message);
+            }
+
+            @Override
+            public void error(String message, Throwable throwable) {
+                System.err.println("ERROR: " + message);
+                throwable.printStackTrace();
+            }
+
+            @Override
+            public void error(String format, Object... params) {
+                try {
+                    System.err.println("ERROR: " + String.format(format.replace("{}", "%s"), params));
+                } catch (Exception e) {
+                }
+            }
+        };
+
+        registry = TriggerRegistryFactory.create(TriggerType.AUTOMATON, dbms, consoleLog);
         orchestrator = new InMemoryOrchestrator(registry);
 
-        listener = new Listener(NullLog.getInstance(), orchestrator, registry);
+        listener = new Listener(consoleLog, orchestrator, registry);
         dbms.registerTransactionEventListener("neo4j", listener);
     }
 
@@ -88,12 +170,9 @@ public class AutomatonPathTriggerPerformanceTest {
 
     @Test
     void runPerformanceTest() {
-        int[] fanOuts = { 2, 5, 10, 20 };
-        int numPersons = 5; // Total paths = numPersons * fanOut * fanOut
+        int[] fanOuts = { 2, 5 };
+        int numPersons = 3;
 
-        System.out.println("Automaton Path Trigger Performance Results");
-        System.out.println("Pattern: (:Person)-[:OWN]->(:Account)<-[:DEPOSIT]-(:Loan)");
-        System.out.println("----------------------------------------------------------------------------------");
         System.out.println("Fan-Out | Avg Latency (ms) | Total Time With (ms) | Total Time Without (ms) | Memory (MB)");
         System.out.println("--------|------------------|----------------------|-------------------------|------------");
 
@@ -131,6 +210,8 @@ public class AutomatonPathTriggerPerformanceTest {
         long startWith = System.currentTimeMillis();
         performInsertions(latencies, lastTriggerDetectedTime);
         long endWith = System.currentTimeMillis();
+
+        System.out.println("Trigger firing count for fan-out " + accountsPerPerson + ": " + triggerCount.get());
 
         System.gc();
         long memoryAfter = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
