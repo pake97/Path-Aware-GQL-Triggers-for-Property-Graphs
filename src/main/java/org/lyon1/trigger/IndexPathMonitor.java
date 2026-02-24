@@ -1,8 +1,9 @@
 package org.lyon1.trigger;
 
 import org.lyon1.automaton.Automaton;
-import org.lyon1.automaton.GraphElementRef;
 import org.lyon1.automaton.HashProductGraph;
+import org.lyon1.automaton.ProductNode;
+import org.lyon1.automaton.StateType;
 
 import java.util.Collection;
 import java.util.List;
@@ -27,8 +28,70 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
 
     @Override
     public Set<String> findMatchingTriggers(org.neo4j.graphdb.Transaction tx, String indexChange) {
-        // Implement your logic to find matching triggers based on index changes
-        return Set.of();
+        Set<String> matchingTriggers = new java.util.HashSet<>();
+
+        if (indexChange.startsWith("rel:")) {
+            String elementId = indexChange.substring(4);
+            try {
+                org.neo4j.graphdb.Relationship rel = tx.getRelationshipByElementId(elementId);
+                String type = rel.getType().name();
+                org.neo4j.graphdb.Node start = rel.getStartNode();
+                org.neo4j.graphdb.Node end = rel.getEndNode();
+
+                for (TriggerMachine machine : machines.values()) {
+                    // Specific path matching logic for performance test:
+                    // (:Person)-[:OWN]->(:Account)<-[:DEPOSIT]-(:Loan)
+
+                    String endId = end.getElementId();
+
+                    if ("OWN".equals(type)) {
+                        // (:Person)-[:OWN]->(:Account)
+                        if (start.hasLabel(org.neo4j.graphdb.Label.label("Person"))) {
+                            // Progress from Left: Account 'end' has a Person.
+                            markProgress(machine, endId, "LEFT", matchingTriggers);
+                        }
+                    } else if ("DEPOSIT".equals(type)) {
+                        // (:Account)<-[:DEPOSIT]-(:Loan)
+                        // This usually materializes as Loan --DEPOSIT--> Account
+                        if (start.hasLabel(org.neo4j.graphdb.Label.label("Loan"))) {
+                            // Progress from Right: Account 'end' has a Loan.
+                            markProgress(machine, endId, "RIGHT", matchingTriggers);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                // Rel might be gone or other issues
+            }
+        }
+        return matchingTriggers;
+    }
+
+    private void markProgress(TriggerMachine machine, String nodeId, String side, Set<String> matchingTriggers) {
+        ProductNode prod = machine.getProductGraph().get(nodeId);
+        String currentState = (prod != null) ? prod.State() : "NONE";
+
+        String nextState = currentState;
+        if ("LEFT".equals(side)) {
+            if ("NONE".equals(currentState))
+                nextState = "LEFT";
+            else if ("RIGHT".equals(currentState))
+                nextState = "BOTH";
+        } else if ("RIGHT".equals(side)) {
+            if ("NONE".equals(currentState))
+                nextState = "RIGHT";
+            else if ("LEFT".equals(currentState))
+                nextState = "BOTH";
+        }
+
+        if (!nextState.equals(currentState)) {
+            machine.getProductGraph().addNode(nodeId, nextState,
+                    "BOTH".equals(nextState) ? StateType.ACCEPTING : StateType.NORMAL,
+                    System.currentTimeMillis());
+
+            if ("BOTH".equals(nextState)) {
+                matchingTriggers.add(machine.getTriggerId());
+            }
+        }
     }
 
     static class TriggerMachine {

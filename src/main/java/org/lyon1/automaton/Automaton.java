@@ -1,4 +1,5 @@
 package org.lyon1.automaton;
+
 import org.lyon1.path.GraphElement;
 import org.lyon1.path.GraphPath;
 
@@ -13,10 +14,13 @@ public class Automaton implements AutomatonInterface {
     private final Set<String> initialStates = new HashSet<>();
     private final Set<String> acceptingStates = new HashSet<>();
 
-
-
     public Automaton(GraphPath path) {
+        this.transitionTable = new AutomatonTransitionTable();
         this.buildFromPath(path);
+    }
+
+    public Automaton() {
+        this.transitionTable = new AutomatonTransitionTable();
     }
 
     private void buildFromPath(GraphPath path) {
@@ -121,4 +125,3 @@ public class Automaton implements AutomatonInterface {
         return false;
     }
 }
-
