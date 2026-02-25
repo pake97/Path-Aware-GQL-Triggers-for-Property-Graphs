@@ -2,7 +2,6 @@ package org.lyon1.trigger;
 
 import org.lyon1.automaton.Automaton;
 import org.lyon1.automaton.PatternParser;
-import org.lyon1.automaton.StateType;
 import org.lyon1.path.GraphElement;
 import org.lyon1.path.GraphPath;
 import org.neo4j.dbms.api.DatabaseManagementService;
@@ -19,14 +18,6 @@ public final class IndexTriggerRegistry extends TriggerRegistry {
     @Override
     protected PathMonitor buildPathMonitor(Collection<Trigger> triggers) {
 
-        Map<EventType, Map<String, Set<String>>> pathIndex = new HashMap<>();
-
-        Map<String, Set<String>> createEventMap = new HashMap<>();
-        Map<String, Set<String>> deleteEventMap = new HashMap<>();
-
-        pathIndex.put(EventType.ON_CREATE, deleteEventMap);
-        pathIndex.put(EventType.ON_DELETE, createEventMap);
-
         List<IndexPathMonitor.TriggerMachine> machines = new java.util.ArrayList<>();
 
         for (Trigger trigger : triggers) {
@@ -37,17 +28,21 @@ public final class IndexTriggerRegistry extends TriggerRegistry {
                 GraphPath path = pathFromCanonicalSignature(pathSignature);
                 Automaton automaton = new Automaton(path);
 
-                Set<String> initialStates = automaton.getInitialStates();
+                String initialLabel = path.get(0).getLabel();
+                String initialState = "S0";
                 Set<String> acceptingStates = automaton.getAcceptingStates();
 
                 IndexPathMonitor.TriggerMachine machine = new IndexPathMonitor.TriggerMachine(
-                        trigger.id(), automaton, initialStates, acceptingStates);
+                        trigger.id(), automaton, initialLabel, initialState, acceptingStates);
 
                 for (GraphElement element : path.getElements()) {
+                    if (element.isRelationship())
+                        continue;
+
                     String label = element.getLabel();
-                    // Query to get all nodes with that label
+                    // Query to get all nodes with that label using elementId
                     Set<String> els = dbms.database("neo4j").executeTransactionally(
-                            "MATCH (n:" + label + ") RETURN id(n) as id",
+                            "MATCH (n:" + label + ") RETURN elementId(n) as id",
                             Collections.emptyMap(),
                             result -> {
                                 Set<String> ids = new HashSet<>();
@@ -59,12 +54,9 @@ public final class IndexTriggerRegistry extends TriggerRegistry {
                             });
 
                     for (String nodeId : els) {
-                        StateType type = StateType.NORMAL;
-                        if (initialStates.contains(label))
-                            type = StateType.INITIAL;
-                        else if (acceptingStates.contains(label))
-                            type = StateType.ACCEPTING;
-                        machine.getProductGraph().addNode(nodeId, label, type, System.currentTimeMillis());
+                        if (label.equals(initialLabel)) {
+                            machine.getOrCreateTree(nodeId, initialState);
+                        }
                     }
                 }
 
@@ -72,9 +64,7 @@ public final class IndexTriggerRegistry extends TriggerRegistry {
             }
         }
 
-        // Whatever you need to build your automaton-based path monitor.
-        // This is the ONLY part that differs for this subclass.
-        return IndexPathMonitor.fromMachines(machines);
+        return IndexPathMonitor.fromMachines(machines, neoLog);
     }
 
     public Set<String> candidatesForPath(String label) {
@@ -82,8 +72,6 @@ public final class IndexTriggerRegistry extends TriggerRegistry {
     }
 
     GraphPath pathFromCanonicalSignature(String pathSignature) {
-
         return PatternParser.parsePattern(pathSignature);
-
     }
 }

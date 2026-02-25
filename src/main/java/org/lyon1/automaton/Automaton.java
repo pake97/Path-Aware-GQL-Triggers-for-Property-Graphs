@@ -1,10 +1,12 @@
 package org.lyon1.automaton;
 
+import org.lyon1.path.ElementType;
 import org.lyon1.path.GraphElement;
 import org.lyon1.path.GraphPath;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -24,14 +26,24 @@ public class Automaton implements AutomatonInterface {
     }
 
     private void buildFromPath(GraphPath path) {
-        this.addInitialState(path.get(0).getLabel());
-        this.addAcceptingState(path.get(path.getNodes().size() + path.getRelationships().size() - 1).getLabel());
-        for (int i = 0; i < path.getNodes().size() + path.getRelationships().size() - 1; i++) {
-            String from = path.get(i).getLabel();
-            String to = path.get(i + 1).getLabel();
-            String symbol = path.get(i).getLabel();
-            this.addTransition(from, symbol, to);
+        List<GraphElement> elements = path.getElements();
+
+        int stateIdx = 0;
+        String currentState = "S" + stateIdx;
+        this.addInitialState(currentState);
+
+        for (GraphElement el : elements) {
+            if (el.isRelationship()) {
+                String symbol = el.getLabel();
+                if (el.isIncoming()) {
+                    symbol = "^" + symbol;
+                }
+                String nextState = "S" + (++stateIdx);
+                this.addTransition(currentState, symbol, nextState);
+                currentState = nextState;
+            }
         }
+        this.addAcceptingState(currentState);
     }
 
     // ---- Configuration API (builder-like, mutable) ----
@@ -57,7 +69,6 @@ public class Automaton implements AutomatonInterface {
         return this;
     }
 
-    // You can expose addTransition/… via delegating to transitionTable if useful:
     public Automaton addTransition(String from, String symbol, String to) {
         transitionTable.addTransition(from, symbol, to);
         return this;
