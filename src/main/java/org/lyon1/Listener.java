@@ -122,35 +122,40 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         }
 
         // 4) Path candidates (via your matcher)
-        final List<String> pathCandidateIds = new ArrayList<>();
+        final Map<String, List<TriggerRegistryInterface.PathMatch>> pathMatches = new HashMap<>();
 
         // Check for node changes
         for (Node n : data.createdNodes()) {
-            pathCandidateIds.addAll(ix.pathMonitor().findMatchingTriggers(tx, "node:" + n.getElementId()));
+            mergeMatches(pathMatches, ix.pathMonitor().findMatches(tx, "node:" + n.getElementId()));
         }
         for (Node n : data.deletedNodes()) {
-            pathCandidateIds.addAll(ix.pathMonitor().findMatchingTriggers(tx, "node:" + n.getElementId()));
+            mergeMatches(pathMatches, ix.pathMonitor().findMatches(tx, "node:" + n.getElementId()));
         }
 
         // Check for relationship changes
         for (Relationship r : data.createdRelationships()) {
-            pathCandidateIds.addAll(ix.pathMonitor().findMatchingTriggers(tx, "rel:" + r.getElementId()));
+            mergeMatches(pathMatches, ix.pathMonitor().findMatches(tx, "rel:" + r.getElementId()));
         }
         for (Relationship r : data.deletedRelationships()) {
-            pathCandidateIds.addAll(ix.pathMonitor().findMatchingTriggers(tx, "rel:" + r.getElementId()));
+            mergeMatches(pathMatches, ix.pathMonitor().findMatches(tx, "rel:" + r.getElementId()));
         }
+
+        log.info("Node candidates count : " + nodeCandidateIds.size());
+        log.info("Rel candidates count : " + relCandidateIds.size());
+        log.info("Path triggers matched : " + pathMatches.keySet());
 
         log.info("Node candidates : " + nodeCandidateIds.toString() + " size : " + nodeCandidateIds.size());
         log.info("Rel candidates : " + relCandidateIds.toString() + " size : " + relCandidateIds.size());
-        log.info("path candidates : " + pathCandidateIds.toString() + " size : " + pathCandidateIds.size());
+        log.info("path candidates : " + pathMatches.keySet() + " size : " + pathMatches.size());
 
         // 5) De-dup IDs and load triggers (enabled only)
         // rewrite this : i don't need to de duplicate because i'm using lists not sets
 
         final Map<String, TriggerRegistryInterface.Trigger> byId = snap.byId();
         final List<TriggerRegistryInterface.Trigger> candidates = Stream
-                .of(nodeCandidateIds, relCandidateIds, pathCandidateIds)
+                .of(nodeCandidateIds, relCandidateIds, new ArrayList<>(pathMatches.keySet()))
                 .flatMap(Collection::stream)
+                .distinct()
                 .map(byId::get)
                 .filter(Objects::nonNull)
                 .filter(TriggerRegistryInterface.Trigger::enabled)
@@ -183,7 +188,8 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
                             .orElse(c -> {
                             }); // no-op fallback
 
-                    planned.add(new PlannedTrigger(t, ctx.dedupeKey(t), resolved));
+                    List<TriggerRegistryInterface.PathMatch> matches = pathMatches.getOrDefault(t.id(), List.of());
+                    planned.add(new PlannedTrigger(t, ctx.dedupeKey(t), resolved, matches));
                 }
             } catch (Exception ex) {
                 log.warn("Predicate for trigger " + t.id() + " threw, skipping. " + ex.getMessage(), ex);
@@ -219,7 +225,7 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         // 8) Execute BEFORE_COMMIT actions now
         for (PlannedTrigger p : beforeCommit) {
             try {
-                p.action().accept(new CommittedContext(p.trigger(), data, db, p.dedupeKey()));
+                p.action().accept(new CommittedContext(p.trigger(), data, db, p.dedupeKey(), p.matches()));
             } catch (Exception ex) {
                 log.warn("Action for BEFORE_COMMIT trigger " + p.trigger().id() + " threw. " + ex.getMessage(), ex);
             }
@@ -237,7 +243,7 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
                 log.info("Executing action for id=" + p.trigger().id() +
                         " class=" + p.action().getClass().getName());
 
-                p.action().accept(new CommittedContext(p.trigger(), data, db, p.dedupeKey()));
+                p.action().accept(new CommittedContext(p.trigger(), data, db, p.dedupeKey(), p.matches()));
             } catch (Exception ex) {
                 // Do not throw; commit is done. Consider sending to a DLQ.
                 log.error("Trigger action failed id=" + p.trigger().id() + " key=" + p.dedupeKey() + ": "
@@ -287,12 +293,14 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         private final TriggerRegistryInterface.Trigger trigger;
         private final String dedupeKey;
         private final Consumer<CommittedContext> action;
+        private final List<TriggerRegistryInterface.PathMatch> matches;
 
         public PlannedTrigger(TriggerRegistryInterface.Trigger trigger, String dedupeKey,
-                Consumer<CommittedContext> action) {
+                Consumer<CommittedContext> action, List<TriggerRegistryInterface.PathMatch> matches) {
             this.trigger = trigger;
             this.dedupeKey = dedupeKey;
             this.action = action;
+            this.matches = matches;
         }
 
         public TriggerRegistryInterface.Trigger trigger() {
@@ -301,6 +309,10 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
 
         public String dedupeKey() {
             return dedupeKey;
+        }
+
+        public List<TriggerRegistryInterface.PathMatch> matches() {
+            return matches;
         }
 
         public java.util.function.Consumer<CommittedContext> action() {
@@ -341,5 +353,12 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
             map.computeIfAbsent(id, k -> new LinkedHashSet<>()).add(ev.label().name());
         }
         return map;
+    }
+
+    private static void mergeMatches(Map<String, List<TriggerRegistryInterface.PathMatch>> target,
+            Map<String, List<TriggerRegistryInterface.PathMatch>> source) {
+        for (Map.Entry<String, List<TriggerRegistryInterface.PathMatch>> entry : source.entrySet()) {
+            target.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).addAll(entry.getValue());
+        }
     }
 }

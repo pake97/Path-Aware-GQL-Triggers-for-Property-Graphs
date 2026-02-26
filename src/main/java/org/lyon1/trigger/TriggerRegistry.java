@@ -322,8 +322,8 @@ public abstract class TriggerRegistry implements TriggerRegistryInterface {
     private static final class EmptyPathMonitor implements PathMonitor {
 
         @Override
-        public Set<String> findMatchingTriggers(org.neo4j.graphdb.Transaction tx, String canonicalSignature) {
-            return Set.of();
+        public Map<String, List<PathMatch>> findMatches(org.neo4j.graphdb.Transaction tx, String eventData) {
+            return Map.of();
         }
 
     }

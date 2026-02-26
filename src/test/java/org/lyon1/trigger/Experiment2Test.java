@@ -6,8 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.lyon1.Listener;
 import org.neo4j.dbms.api.DatabaseManagementService;
-import org.neo4j.graphdb.GraphDatabaseService;
-import org.neo4j.graphdb.Transaction;
+import org.neo4j.graphdb.*;
 import org.neo4j.harness.Neo4j;
 import org.neo4j.harness.Neo4jBuilders;
 import org.neo4j.logging.Log;
@@ -17,10 +16,7 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -212,6 +208,124 @@ public class Experiment2Test {
         runWithTrigger("PATH");
     }
 
+    @Test
+    void runExperiment2WithCascading() throws IOException {
+        System.out.println("Experiment 2 (CASCADING): Transitive Closure Performance (Baseline vs INDEX vs PATH)");
+        System.out.println("Trigger Pattern: " + PATTERN);
+        System.out.println();
+        System.out.println(
+                "Query | Mode | Count | Avg Tx Time (ms) | StdDev Time | Avg Act Latency (ms) | StdDev Latency | Activations | Overhead (%) | Avg Mem (MB) | StdDev Mem");
+        System.out.println(
+                "------|------|-------|------------------|-------------|----------------------|----------------|-------------|--------------|--------------|-----------");
+
+        // 1. Warmup
+        System.err.println("--- Starting Warmup (Cascading) ---");
+        switchRegistry(TriggerType.INDEX);
+        clearDatabase();
+        runFullSequence(false, null, null, true);
+        runWithCascadingTrigger("WARMUP-INDEX");
+
+        switchRegistry(TriggerType.AUTOMATON);
+        clearDatabase();
+        runWithCascadingTrigger("WARMUP-PATH");
+
+        // 2. Baseline
+        System.err.println("--- Starting Baseline ---");
+        clearDatabase();
+        runFullSequence(false, null, null, false);
+
+        // 3. Index
+        System.err.println("--- Starting Index Phase (Cascading) ---");
+        switchRegistry(TriggerType.INDEX);
+        runWithCascadingTrigger("INDEX");
+
+        // 4. Path (Automaton)
+        System.err.println("--- Starting Path Phase (Cascading) ---");
+        switchRegistry(TriggerType.AUTOMATON);
+        runWithCascadingTrigger("PATH");
+    }
+
+    @Test
+    void testCascadingTriggers() throws IOException {
+        System.out.println("--- Starting Cascading Triggers Test ---");
+        switchRegistry(TriggerType.AUTOMATON);
+        clearDatabase();
+
+        AtomicLong cascadingActivations = new AtomicLong(0);
+
+        // 1. Materialization Trigger:
+        orchestrator.register(new FullTrigger(
+                "materialization-trigger",
+                TriggerRegistryInterface.Scope.PATH,
+                new TriggerRegistryInterface.PathActivation(PATTERN, 2, TriggerRegistryInterface.EventType.ON_CREATE),
+                1,
+                true,
+                ctx -> true,
+                committed -> {
+                    for (TriggerRegistryInterface.PathMatch match : committed.matches()) {
+                        String startNodeId = match.nodeIds().get(0);
+                        String endNodeId = match.nodeIds().get(match.nodeIds().size() - 1);
+                        System.out.println("MATERIALIZING: Creating indirectGuarantee between " + startNodeId + " and "
+                                + endNodeId);
+                        java.util.concurrent.CompletableFuture.runAsync(() -> {
+                            try (Transaction tx = committed.db().beginTx()) {
+                                Node start = tx.getNodeByElementId(startNodeId);
+                                Node end = tx.getNodeByElementId(endNodeId);
+                                start.createRelationshipTo(end, RelationshipType.withName("indirectGuarantee"));
+                                tx.commit();
+                            } catch (Exception e) {
+                                System.err.println("Materialization failed: " + e.getMessage());
+                            }
+                        });
+                    }
+                },
+                TriggerRegistryInterface.Time.AFTER_COMMIT,
+                1));
+
+        // 2. Watch Trigger:
+        orchestrator.register(new FullTrigger(
+                "watch-indirect",
+                TriggerRegistryInterface.Scope.RELATIONSHIP,
+                new TriggerRegistryInterface.RelActivation("indirectGuarantee", Collections.emptySet(),
+                        Collections.emptySet(), TriggerRegistryInterface.EventType.ON_CREATE),
+                1,
+                true,
+                ctx -> true,
+                committed -> {
+                    System.out.println("CASCADE SUCCESS: indirectGuarantee detected in second trigger!");
+                    cascadingActivations.incrementAndGet();
+                },
+                TriggerRegistryInterface.Time.AFTER_COMMIT,
+                2));
+
+        // 3. Execution
+        try (Transaction tx = db.beginTx()) {
+            Node p1 = tx.createNode(Label.label("Person"));
+            Node p2 = tx.createNode(Label.label("Person"));
+            Node p3 = tx.createNode(Label.label("Person"));
+            p1.createRelationshipTo(p2, RelationshipType.withName("guarantee"));
+            tx.commit();
+        }
+
+        try (Transaction tx = db.beginTx()) {
+            Node p2 = tx.execute("MATCH (p:Person) RETURN p SKIP 1 LIMIT 1").<Node>columnAs("p").next();
+            Node p3 = tx.execute("MATCH (p:Person) RETURN p SKIP 2 LIMIT 1").<Node>columnAs("p").next();
+            p2.createRelationshipTo(p3, RelationshipType.withName("guarantee"));
+            tx.commit();
+        }
+
+        try {
+            Thread.sleep(2000);
+        } catch (InterruptedException e) {
+        }
+        System.out.println("Total cascading activations detected: " + cascadingActivations.get());
+        if (cascadingActivations.get() > 0) {
+            System.out.println("RESULT: Cascading triggers WORKED!");
+        } else {
+            System.err.println("RESULT: Cascading triggers FAILED to detect materialized relationship.");
+        }
+    }
+
     private void runWithTrigger(String modeLabel) throws IOException {
         clearDatabase();
         TriggerRegistryInterface.PathActivation activation = new TriggerRegistryInterface.PathActivation(
@@ -238,6 +352,63 @@ public class Experiment2Test {
         orchestrator.unregister(triggerId);
     }
 
+    private void runWithCascadingTrigger(String modeLabel) throws IOException {
+        clearDatabase();
+        TriggerRegistryInterface.PathActivation activation = new TriggerRegistryInterface.PathActivation(
+                PATTERN, 0, TriggerRegistryInterface.EventType.ON_CREATE);
+
+        AtomicLong lastTriggerDetectedTime = new AtomicLong(0);
+        AtomicLong triggerCount = new AtomicLong(0);
+
+        String triggerId = orchestrator.register(new FullTrigger(
+                modeLabel.toLowerCase() + "-cascading-trigger",
+                TriggerRegistryInterface.Scope.PATH,
+                activation,
+                100,
+                true,
+                ctx -> true,
+                committed -> {
+                    lastTriggerDetectedTime.set(System.nanoTime());
+                    triggerCount.incrementAndGet();
+
+                    for (TriggerRegistryInterface.PathMatch match : committed.matches()) {
+                        String startNodeId = match.nodeIds().get(0);
+                        String endNodeId = match.nodeIds().get(match.nodeIds().size() - 1);
+
+                        java.util.concurrent.CompletableFuture.runAsync(() -> {
+                            try (Transaction tx = committed.db().beginTx()) {
+                                Node start = tx.getNodeByElementId(startNodeId);
+                                Node end = tx.getNodeByElementId(endNodeId);
+
+                                // Existence check
+                                boolean exists = false;
+                                for (Relationship r : start.getRelationships(Direction.OUTGOING,
+                                        RelationshipType.withName("guarantee"))) {
+                                    if (r.getEndNode().getElementId().equals(endNodeId)) {
+                                        exists = true;
+                                        break;
+                                    }
+                                }
+
+                                if (!exists) {
+                                    start.createRelationshipTo(end, RelationshipType.withName("guarantee"));
+                                    tx.commit();
+                                } else {
+                                    tx.rollback();
+                                }
+                            } catch (Exception e) {
+                                // Ignore errors in async materialization
+                            }
+                        });
+                    }
+                },
+                TriggerRegistryInterface.Time.AFTER_COMMIT,
+                0));
+
+        runFullSequence(true, lastTriggerDetectedTime, triggerCount, false, modeLabel);
+        orchestrator.unregister(triggerId);
+    }
+
     private void runFullSequence(boolean withTrigger, AtomicLong lastTriggerDetectedTime, AtomicLong triggerCount,
             boolean isWarmup) throws IOException {
         runFullSequence(withTrigger, lastTriggerDetectedTime, triggerCount, isWarmup,
@@ -246,8 +417,6 @@ public class Experiment2Test {
 
     private void runFullSequence(boolean withTrigger, AtomicLong lastTriggerDetectedTime, AtomicLong triggerCount,
             boolean isWarmup, String modeLabel) throws IOException {
-
-        // Phase 1: Load persons (tw-1)
         measureQuery("tw-1.cypher", "snapshot/Person.csv",
                 new String[] { "personId", "personName", "isBlocked", "gender", "birthday", "country", "city",
                         "currentTime" },
@@ -255,7 +424,6 @@ public class Experiment2Test {
                         "createTime" },
                 withTrigger, lastTriggerDetectedTime, triggerCount, isWarmup, modeLabel);
 
-        // Phase 2: Add guarantees (tw-10) - This fires the trigger
         measureQuery("tw-10.cypher", "incremental/AddPersonGuaranteePersonWrite10.csv",
                 new String[] { "pid1", "pid2", "currentTime" },
                 new String[] { "fromId", "toId", "createTime" },
@@ -293,7 +461,6 @@ public class Experiment2Test {
             memorySamples.add((double) (memAfter - memBefore) / (1024.0 * 1024.0));
 
             if (withTrigger && lastTriggerDetectedTime != null && lastTriggerDetectedTime.get() > commitStartTime) {
-                // Delay since the commit started
                 long latency = lastTriggerDetectedTime.get() - commitStartTime;
                 activationLatencies.add(Math.max(0L, latency));
             }
@@ -329,9 +496,8 @@ public class Experiment2Test {
             baselines.put(queryFile, avgTxMs);
         } else {
             Double baseline = baselines.get(queryFile);
-            if (baseline != null && baseline > 0) {
+            if (baseline != null && baseline > 0)
                 overhead = ((avgTxMs - baseline) / baseline) * 100.0;
-            }
         }
 
         System.out.printf("%-13s | %-8s | %5d | %16.4f | %11.4f | %20.2f | %14.4f | %11d | %12.2f | %12.3f | %10.4f\n",

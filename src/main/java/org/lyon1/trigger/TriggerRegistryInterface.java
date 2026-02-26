@@ -175,9 +175,25 @@ public interface TriggerRegistryInterface {
         }
     }
 
+    record PathMatch(List<String> nodeIds, List<String> relIds) {
+    }
+
     interface PathMonitor {
 
-        Set<String> findMatchingTriggers(Transaction tx, String canonicalSignature);
+        /**
+         * Find all matches for the given event data.
+         * 
+         * @param tx        the transaction
+         * @param eventData info about the change (e.g. "node:id" or "rel:id")
+         * @return a map from triggerId to the list of matches found
+         */
+        Map<String, List<PathMatch>> findMatches(Transaction tx, String eventData);
+
+        // Deprecated - use findMatches instead
+        @Deprecated
+        default Set<String> findMatchingTriggers(Transaction tx, String eventData) {
+            return findMatches(tx, eventData).keySet();
+        }
 
     }
 

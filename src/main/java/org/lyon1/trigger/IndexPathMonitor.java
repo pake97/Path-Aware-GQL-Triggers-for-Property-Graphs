@@ -25,11 +25,12 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
     }
 
     @Override
-    public Set<String> findMatchingTriggers(org.neo4j.graphdb.Transaction tx, String indexChange) {
-        Set<String> matchingTriggers = new java.util.HashSet<>();
+    public Map<String, List<TriggerRegistryInterface.PathMatch>> findMatches(org.neo4j.graphdb.Transaction tx,
+            String eventData) {
+        Map<String, List<TriggerRegistryInterface.PathMatch>> matchesFound = new java.util.HashMap<>();
 
-        if (indexChange.startsWith("node:")) {
-            String elementId = indexChange.substring(5);
+        if (eventData.startsWith("node:")) {
+            String elementId = eventData.substring(5);
             try {
                 org.neo4j.graphdb.Node node = tx.getNodeByElementId(elementId);
                 for (TriggerMachine machine : machines.values()) {
@@ -39,8 +40,8 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
                 }
             } catch (Exception e) {
             }
-        } else if (indexChange.startsWith("rel:")) {
-            String elementId = indexChange.substring(4);
+        } else if (eventData.startsWith("rel:")) {
+            String elementId = eventData.substring(4);
             try {
                 org.neo4j.graphdb.Relationship rel = tx.getRelationshipByElementId(elementId);
                 String type = rel.getType().name();
@@ -49,20 +50,20 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
 
                 for (TriggerMachine machine : machines.values()) {
                     // Check outgoing transitions: start -> end
-                    processRelationship(tx, machine, rel, start, end, type, false, matchingTriggers);
+                    processRelationship(tx, machine, rel, start, end, type, false, matchesFound);
                     // Check incoming transitions: end -> start
-                    processRelationship(tx, machine, rel, end, start, type, true, matchingTriggers);
+                    processRelationship(tx, machine, rel, end, start, type, true, matchesFound);
                 }
             } catch (Exception e) {
             }
         }
-        return matchingTriggers;
+        return matchesFound;
     }
 
     private void processRelationship(org.neo4j.graphdb.Transaction tx, TriggerMachine machine,
             org.neo4j.graphdb.Relationship rel,
             org.neo4j.graphdb.Node u, org.neo4j.graphdb.Node v,
-            String type, boolean isIncoming, Set<String> matchingTriggers) {
+            String type, boolean isIncoming, Map<String, List<TriggerRegistryInterface.PathMatch>> results) {
         String uId = u.getElementId();
         String vId = v.getElementId();
         String symbol = isIncoming ? "^" + type : type;
@@ -73,7 +74,7 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
             for (String t : nextStates) {
                 Set<SpanningTree> trees = machine.getTreesForNodeState(uId, s);
                 for (SpanningTree tree : trees) {
-                    expand(tx, machine, tree, new NodeState(uId, s), new NodeState(vId, t), rel, matchingTriggers);
+                    expand(tx, machine, tree, new NodeState(uId, s), new NodeState(vId, t), rel, results);
                 }
             }
         }
@@ -84,23 +85,26 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
             Set<String> nextStates = machine.automaton.step(machine.initialState, symbol);
             for (String t : nextStates) {
                 expand(tx, machine, tree, new NodeState(uId, machine.initialState), new NodeState(vId, t), rel,
-                        matchingTriggers);
+                        results);
             }
         }
     }
 
     private void expand(org.neo4j.graphdb.Transaction tx, TriggerMachine machine, SpanningTree tree,
-            NodeState u, NodeState v, org.neo4j.graphdb.Relationship e, Set<String> results) {
+            NodeState u, NodeState v, org.neo4j.graphdb.Relationship e,
+            Map<String, List<TriggerRegistryInterface.PathMatch>> results) {
         if (tree.contains(v))
             return;
 
-        tree.addNode(v, u);
+        tree.addNode(v, u, e.getElementId());
         machine.addToInvertedIndex(v, tree);
 
         if (machine.automaton.isAccepting(v.state())) {
-            results.add(machine.triggerId);
+            TriggerRegistryInterface.PathMatch match = tree.reconstructPathMatch(v);
+            results.computeIfAbsent(machine.triggerId, k -> new java.util.ArrayList<>()).add(match);
+
             if (log != null) {
-                log.info("S-PATH Match! Triggered=" + machine.triggerId + " | Path=" + tree.reconstructPath(v));
+                log.info("S-PATH Match! Triggered=" + machine.triggerId + " | Path=" + match);
             }
         }
 
@@ -135,6 +139,7 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
     public static class SpanningTree {
         final String rootId;
         final Map<NodeState, NodeState> parentPointers = new java.util.HashMap<>();
+        final Map<NodeState, String> edgePointers = new java.util.HashMap<>();
 
         SpanningTree(String rootId, String initialState) {
             this.rootId = rootId;
@@ -145,8 +150,26 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
             return parentPointers.containsKey(ns);
         }
 
-        void addNode(NodeState ns, NodeState parent) {
+        void addNode(NodeState ns, NodeState parent, String edgeId) {
             parentPointers.put(ns, parent);
+            edgePointers.put(ns, edgeId);
+        }
+
+        public TriggerRegistryInterface.PathMatch reconstructPathMatch(NodeState leaf) {
+            java.util.List<String> nodeIds = new java.util.ArrayList<>();
+            java.util.List<String> relIds = new java.util.ArrayList<>();
+            NodeState curr = leaf;
+            while (curr != null) {
+                nodeIds.add(curr.elementId);
+                String edgeId = edgePointers.get(curr);
+                if (edgeId != null) {
+                    relIds.add(edgeId);
+                }
+                curr = parentPointers.get(curr);
+            }
+            java.util.Collections.reverse(nodeIds);
+            java.util.Collections.reverse(relIds);
+            return new TriggerRegistryInterface.PathMatch(nodeIds, relIds);
         }
 
         String reconstructPath(NodeState leaf) {
