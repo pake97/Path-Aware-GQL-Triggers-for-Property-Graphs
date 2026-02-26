@@ -22,7 +22,7 @@ public class PatternParser {
         // 5: Relationship type
         // 6: Outgoing indicator (>)
         Pattern p = Pattern
-                .compile("(\\(\\s*(?:\\w+\\s*)?:?\\s*(\\w+)\\s*\\))|((<)?\\s*-\\[\\s*:?(\\w+)\\s*\\]-\\s*(>)?)");
+                .compile("(\\(\\s*(?:\\w+\\s*)?:?\\s*([\\w|]+)\\s*\\))|((<)?\\s*-\\[\\s*:?([\\w|]+)\\s*\\]-\\s*(>)?)");
         Matcher m = p.matcher(input);
 
         while (m.find()) {
