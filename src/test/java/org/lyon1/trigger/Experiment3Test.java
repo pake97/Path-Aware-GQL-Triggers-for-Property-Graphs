@@ -37,7 +37,7 @@ public class Experiment3Test {
     private static final String INCREMENTAL_PATH = "src/test/resources/sf0.01/incremental/";
     private static final String QUERIES_PATH = "src/test/resources/queries/";
     private static final String PATTERN = "(:Person)-[:own]->(:Account)<-[:deposit]-(:Loan)";
-    private static final int[] TRIGGER_COUNTS = {1, 3, 5, 10};
+    private static final int[] TRIGGER_COUNTS = { 1, 3, 5, 10 };
 
     @BeforeAll
     void setup() {
@@ -237,6 +237,11 @@ public class Experiment3Test {
                     true,
                     ctx -> true,
                     committed -> {
+                        try {
+                            Thread.sleep(5);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
                         lastTriggerDetectedTime.set(System.nanoTime());
                         triggerCount.incrementAndGet();
                     },
