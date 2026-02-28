@@ -34,7 +34,7 @@ public class Experiment3Test {
     private Listener listener;
     private Log log;
 
-    private static final String INCREMENTAL_PATH = "src/test/resources/sf0.01/incremental/";
+    private static final String INCREMENTAL_PATH = "src/test/resources/sf0.3/incremental/";
     private static final String QUERIES_PATH = "src/test/resources/queries/";
     private static final String PATTERN = "(:Person)-[:own]->(:Account)<-[:deposit]-(:Loan)";
     private static final int[] TRIGGER_COUNTS = { 1, 3, 5, 10 };
@@ -238,7 +238,7 @@ public class Experiment3Test {
                     ctx -> true,
                     committed -> {
                         try {
-                            Thread.sleep(5);
+                            Thread.sleep(0);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
                         }
@@ -299,6 +299,11 @@ public class Experiment3Test {
         List<Long> txTimes = new ArrayList<>();
         List<Long> activationLatencies = new ArrayList<>();
         List<Double> memorySamples = new ArrayList<>();
+
+        // Specialized lists for only-firing transactions
+        List<Long> firingTxTimes = new ArrayList<>();
+        List<Double> firingMemorySamples = new ArrayList<>();
+
         long startTriggerCount = triggerCount != null ? triggerCount.get() : 0;
 
         System.gc();
@@ -315,10 +320,17 @@ public class Experiment3Test {
             long endTime = System.nanoTime();
             long memAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
-            txTimes.add(endTime - startTime);
-            memorySamples.add((double) (memAfter - memBefore) / (1024.0 * 1024.0));
+            long duration = endTime - startTime;
+            double memDelta = (double) (memAfter - memBefore) / (1024.0 * 1024.0);
+
+            txTimes.add(duration);
+            memorySamples.add(memDelta);
 
             if (withTrigger && lastTriggerDetectedTime != null && lastTriggerDetectedTime.get() > commitStartTime) {
+                // This transaction fired a trigger
+                firingTxTimes.add(duration);
+                firingMemorySamples.add(memDelta);
+
                 // Delay since the commit started, captured when the last trigger fires
                 long latency = lastTriggerDetectedTime.get() - commitStartTime;
                 activationLatencies.add(Math.max(0L, latency));
@@ -328,10 +340,19 @@ public class Experiment3Test {
         if (isWarmup)
             return;
 
-        int count = dataset.size();
-        double avgTxMs = (txTimes.stream().mapToLong(Long::longValue).sum() / (double) count) / 1_000_000.0;
+        int totalCount = dataset.size();
+        long totalActivations = (triggerCount != null) ? triggerCount.get() - startTriggerCount : 0;
+
+        // Determine which dataset to use for averages (Averages of Firing-Only)
+        List<Long> targetTxTimes = (withTrigger && !firingTxTimes.isEmpty()) ? firingTxTimes : txTimes;
+        List<Double> targetMemory = (withTrigger && !firingMemorySamples.isEmpty()) ? firingMemorySamples
+                : memorySamples;
+
+        int sampleCount = targetTxTimes.size();
+        double avgTxMs = (targetTxTimes.stream().mapToLong(Long::longValue).sum() / (double) sampleCount) / 1_000_000.0;
         double stdDevTx = Math.sqrt(
-                txTimes.stream().mapToDouble(t -> Math.pow((t / 1_000_000.0) - avgTxMs, 2)).average().orElse(0.0));
+                targetTxTimes.stream().mapToDouble(t -> Math.pow((t / 1_000_000.0) - avgTxMs, 2)).average()
+                        .orElse(0.0));
 
         double avgActMs = 0;
         double stdDevAct = 0;
@@ -343,12 +364,10 @@ public class Experiment3Test {
                     .mapToDouble(l -> Math.pow((l / 1_000_000.0) - finalAvgActMs, 2)).average().orElse(0.0));
         }
 
-        double avgMem = memorySamples.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+        double avgMem = targetMemory.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
         double finalAvgMem = Math.max(0, avgMem);
-        double stdDevMem = Math.sqrt(memorySamples.stream().mapToDouble(m -> Math.pow(Math.max(0, m) - finalAvgMem, 2))
+        double stdDevMem = Math.sqrt(targetMemory.stream().mapToDouble(m -> Math.pow(Math.max(0, m) - finalAvgMem, 2))
                 .average().orElse(0.0));
-
-        long totalActivations = (triggerCount != null) ? triggerCount.get() - startTriggerCount : 0;
 
         double overhead = 0;
         if (modeLabel.equals("BASELINE")) {
@@ -361,7 +380,7 @@ public class Experiment3Test {
         }
 
         System.out.printf("%-13s | %-8s | %5d | %16.4f | %11.4f | %20.4f | %14.4f | %11d | %12.2f | %12.3f | %10.4f\n",
-                queryFile, modeLabel, count, avgTxMs, stdDevTx, avgActMs, stdDevAct, totalActivations,
+                queryFile, modeLabel, totalCount, avgTxMs, stdDevTx, avgActMs, stdDevAct, totalActivations,
                 Math.max(0.0, overhead), finalAvgMem, stdDevMem);
     }
 }
