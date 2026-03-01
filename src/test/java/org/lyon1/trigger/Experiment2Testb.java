@@ -22,6 +22,27 @@ import java.util.concurrent.atomic.AtomicLong;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class Experiment2Testb {
 
+    public static class QueryResult {
+        public double avgTxMs;
+        public double stdDevTx;
+        public double avgActMs;
+        public double stdDevAct;
+        public double avgMem;
+        public double stdDevMem;
+        public double overhead;
+
+        public QueryResult(double avgTxMs, double stdDevTx, double avgActMs, double stdDevAct, double avgMem,
+                double stdDevMem, double overhead) {
+            this.avgTxMs = avgTxMs;
+            this.stdDevTx = stdDevTx;
+            this.avgActMs = avgActMs;
+            this.stdDevAct = stdDevAct;
+            this.avgMem = avgMem;
+            this.stdDevMem = stdDevMem;
+            this.overhead = overhead;
+        }
+    }
+
     private Neo4j neo4j;
     private DatabaseManagementService dbms;
     private GraphDatabaseService db;
@@ -173,7 +194,7 @@ public class Experiment2Testb {
 
     @Test
     void runExperiment2() throws IOException {
-        System.out.println("Experiment 2: Performance Comparison (Baseline vs INDEX vs PATH)");
+        System.out.println("Experiment 2b: Performance Comparison (Baseline vs INDEX vs PATH)");
         System.out.println("Trigger Pattern: " + PATTERN);
         System.out.println();
         System.out.println(
@@ -195,17 +216,39 @@ public class Experiment2Testb {
         // 2. Baseline
         System.err.println("--- Starting Baseline ---");
         clearDatabase();
-        runFullSequence(false, null, null, false);
+        Map<String, QueryResult> baselineResults = runFullSequence(false, null, null, false);
+        long baselineMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
         // 3. Index
         System.err.println("--- Starting Index Phase ---");
         switchRegistry(TriggerType.INDEX);
-        runWithTrigger("INDEX");
+        Map<String, QueryResult> indexResults = runWithTrigger("INDEX");
+        long indexMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
         // 4. Path (Automaton)
         System.err.println("--- Starting Path Phase ---");
         switchRegistry(TriggerType.AUTOMATON);
-        runWithTrigger("PATH");
+        Map<String, QueryResult> pathResults = runWithTrigger("PATH");
+        long pathMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+
+        // Summary Line for tw-10.cypher
+        QueryResult idxRes = indexResults.get("tw-10.cypher");
+        QueryResult pathRes = pathResults.get("tw-10.cypher");
+
+        if (idxRes != null && pathRes != null) {
+            System.out.println();
+            System.out.printf("Summary (tw-10): %.4f (%.4f) %.4f (%.4f) %.2f %.2f %.4f (%.4f) %.4f (%.4f)\n",
+                    idxRes.avgActMs, idxRes.stdDevAct,
+                    pathRes.avgActMs, pathRes.stdDevAct,
+                    idxRes.overhead, pathRes.overhead,
+                    idxRes.avgMem, idxRes.stdDevMem,
+                    pathRes.avgMem, pathRes.stdDevMem);
+        }
+
+        System.out.printf("Absolute Heap Memory: Baseline: %.2f MB, Index: %.2f MB, Automaton: %.2f MB\n",
+                baselineMem / (1024.0 * 1024.0),
+                indexMem / (1024.0 * 1024.0),
+                pathMem / (1024.0 * 1024.0));
     }
 
     @Test
@@ -232,17 +275,39 @@ public class Experiment2Testb {
         // 2. Baseline
         System.err.println("--- Starting Baseline ---");
         clearDatabase();
-        runFullSequence(false, null, null, false);
+        Map<String, QueryResult> baselineResults = runFullSequence(false, null, null, false);
+        long baselineMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
         // 3. Index
         System.err.println("--- Starting Index Phase (Cascading) ---");
         switchRegistry(TriggerType.INDEX);
-        runWithCascadingTrigger("INDEX");
+        Map<String, QueryResult> indexResults = runWithCascadingTrigger("INDEX");
+        long indexMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
         // 4. Path (Automaton)
         System.err.println("--- Starting Path Phase (Cascading) ---");
         switchRegistry(TriggerType.AUTOMATON);
-        runWithCascadingTrigger("PATH");
+        Map<String, QueryResult> pathResults = runWithCascadingTrigger("PATH");
+        long pathMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+
+        // Summary Line for tw-10.cypher
+        QueryResult idxRes = indexResults.get("tw-10.cypher");
+        QueryResult pathRes = pathResults.get("tw-10.cypher");
+
+        if (idxRes != null && pathRes != null) {
+            System.out.println();
+            System.out.printf("Summary (tw-10): %.4f (%.4f) %.4f (%.4f) %.2f %.2f %.4f (%.4f) %.4f (%.4f)\n",
+                    idxRes.avgActMs, idxRes.stdDevAct,
+                    pathRes.avgActMs, pathRes.stdDevAct,
+                    idxRes.overhead, pathRes.overhead,
+                    idxRes.avgMem, idxRes.stdDevMem,
+                    pathRes.avgMem, pathRes.stdDevMem);
+        }
+
+        System.out.printf("Absolute Heap Memory: Baseline: %.2f MB, Index: %.2f MB, Automaton: %.2f MB\n",
+                baselineMem / (1024.0 * 1024.0),
+                indexMem / (1024.0 * 1024.0),
+                pathMem / (1024.0 * 1024.0));
     }
 
     @Test
@@ -326,7 +391,7 @@ public class Experiment2Testb {
         }
     }
 
-    private void runWithTrigger(String modeLabel) throws IOException {
+    private Map<String, QueryResult> runWithTrigger(String modeLabel) throws IOException {
         clearDatabase();
         TriggerRegistryInterface.PathActivation activation = new TriggerRegistryInterface.PathActivation(
                 PATTERN, 0, TriggerRegistryInterface.EventType.ON_CREATE);
@@ -348,11 +413,13 @@ public class Experiment2Testb {
                 TriggerRegistryInterface.Time.AFTER_COMMIT,
                 0));
 
-        runFullSequence(true, lastTriggerDetectedTime, triggerCount, false, modeLabel);
+        Map<String, QueryResult> results = runFullSequence(true, lastTriggerDetectedTime, triggerCount, false,
+                modeLabel);
         orchestrator.unregister(triggerId);
+        return results;
     }
 
-    private void runWithCascadingTrigger(String modeLabel) throws IOException {
+    private Map<String, QueryResult> runWithCascadingTrigger(String modeLabel) throws IOException {
         clearDatabase();
         TriggerRegistryInterface.PathActivation activation = new TriggerRegistryInterface.PathActivation(
                 PATTERN, 0, TriggerRegistryInterface.EventType.ON_CREATE);
@@ -405,34 +472,46 @@ public class Experiment2Testb {
                 TriggerRegistryInterface.Time.AFTER_COMMIT,
                 0));
 
-        runFullSequence(true, lastTriggerDetectedTime, triggerCount, false, modeLabel);
+        Map<String, QueryResult> results = runFullSequence(true, lastTriggerDetectedTime, triggerCount, false,
+                modeLabel);
         orchestrator.unregister(triggerId);
+        return results;
     }
 
-    private void runFullSequence(boolean withTrigger, AtomicLong lastTriggerDetectedTime, AtomicLong triggerCount,
+    private Map<String, QueryResult> runFullSequence(boolean withTrigger, AtomicLong lastTriggerDetectedTime,
+            AtomicLong triggerCount,
             boolean isWarmup) throws IOException {
-        runFullSequence(withTrigger, lastTriggerDetectedTime, triggerCount, isWarmup,
+        return runFullSequence(withTrigger, lastTriggerDetectedTime, triggerCount, isWarmup,
                 withTrigger ? "WITH" : "BASELINE");
     }
 
-    private void runFullSequence(boolean withTrigger, AtomicLong lastTriggerDetectedTime, AtomicLong triggerCount,
+    private Map<String, QueryResult> runFullSequence(boolean withTrigger, AtomicLong lastTriggerDetectedTime,
+            AtomicLong triggerCount,
             boolean isWarmup, String modeLabel) throws IOException {
-        measureQuery("tw-1.cypher", "snapshot/Person.csv",
+        Map<String, QueryResult> results = new HashMap<>();
+
+        QueryResult r1 = measureQuery("tw-1.cypher", "snapshot/Person.csv",
                 new String[] { "personId", "personName", "isBlocked", "gender", "birthday", "country", "city",
                         "currentTime" },
                 new String[] { "personId", "personName", "isBlocked", "gender", "birthday", "country", "city",
                         "createTime" },
                 withTrigger, lastTriggerDetectedTime, triggerCount, isWarmup, modeLabel);
+        if (r1 != null)
+            results.put("tw-1.cypher", r1);
 
-        measureQuery("tw-10.cypher", "incremental/AddPersonGuaranteePersonWrite10.csv",
+        QueryResult r10 = measureQuery("tw-10.cypher", "incremental/AddPersonGuaranteePersonWrite10.csv",
                 new String[] { "pid1", "pid2", "currentTime" },
                 new String[] { "fromId", "toId", "createTime" },
                 withTrigger, lastTriggerDetectedTime, triggerCount, isWarmup, modeLabel);
+        if (r10 != null)
+            results.put("tw-10.cypher", r10);
+
+        return results;
     }
 
     private static Map<String, Double> baselines = new HashMap<>();
 
-    private void measureQuery(String queryFile, String csvFile, String[] paramKeys, String[] csvHeaders,
+    private QueryResult measureQuery(String queryFile, String csvFile, String[] paramKeys, String[] csvHeaders,
             boolean withTrigger, AtomicLong lastTriggerDetectedTime, AtomicLong triggerCount,
             boolean isWarmup, String modeLabel) throws IOException {
         String query = loadQuery(queryFile);
@@ -441,6 +520,11 @@ public class Experiment2Testb {
         List<Long> txTimes = new ArrayList<>();
         List<Long> activationLatencies = new ArrayList<>();
         List<Double> memorySamples = new ArrayList<>();
+
+        // Specialized lists for only-firing transactions
+        List<Long> firingTxTimes = new ArrayList<>();
+        List<Double> firingMemorySamples = new ArrayList<>();
+
         long startTriggerCount = triggerCount != null ? triggerCount.get() : 0;
 
         System.gc();
@@ -457,22 +541,38 @@ public class Experiment2Testb {
             long endTime = System.nanoTime();
             long memAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
-            txTimes.add(endTime - startTime);
-            memorySamples.add((double) (memAfter - memBefore) / (1024.0 * 1024.0));
+            long duration = endTime - startTime;
+            double memDelta = (double) (memAfter - memBefore) / (1024.0 * 1024.0);
+
+            txTimes.add(duration);
+            memorySamples.add(memDelta);
 
             if (withTrigger && lastTriggerDetectedTime != null && lastTriggerDetectedTime.get() > commitStartTime) {
+                // This transaction fired a trigger
+                firingTxTimes.add(duration);
+                firingMemorySamples.add(memDelta);
+
                 long latency = lastTriggerDetectedTime.get() - commitStartTime;
                 activationLatencies.add(Math.max(0L, latency));
             }
         }
 
         if (isWarmup)
-            return;
+            return null;
 
-        int count = dataset.size();
-        double avgTxMs = (txTimes.stream().mapToLong(Long::longValue).sum() / (double) count) / 1_000_000.0;
+        int totalCount = dataset.size();
+        long totalActivations = (triggerCount != null) ? triggerCount.get() - startTriggerCount : 0;
+
+        // Determine which dataset to use for averages (Averages of Firing-Only)
+        List<Long> targetTxTimes = (withTrigger && !firingTxTimes.isEmpty()) ? firingTxTimes : txTimes;
+        List<Double> targetMemory = (withTrigger && !firingMemorySamples.isEmpty()) ? firingMemorySamples
+                : memorySamples;
+
+        int count = targetTxTimes.size();
+        double avgTxMs = (targetTxTimes.stream().mapToLong(Long::longValue).sum() / (double) count) / 1_000_000.0;
         double stdDevTx = Math.sqrt(
-                txTimes.stream().mapToDouble(t -> Math.pow((t / 1_000_000.0) - avgTxMs, 2)).average().orElse(0.0));
+                targetTxTimes.stream().mapToDouble(t -> Math.pow((t / 1_000_000.0) - avgTxMs, 2)).average()
+                        .orElse(0.0));
 
         double avgActMs = 0;
         double stdDevAct = 0;
@@ -484,12 +584,10 @@ public class Experiment2Testb {
                     .mapToDouble(l -> Math.pow((l / 1_000_000.0) - finalAvgActMs, 2)).average().orElse(0.0));
         }
 
-        double avgMem = memorySamples.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+        double avgMem = targetMemory.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
         double finalAvgMem = Math.max(0, avgMem);
-        double stdDevMem = Math.sqrt(memorySamples.stream().mapToDouble(m -> Math.pow(Math.max(0, m) - finalAvgMem, 2))
+        double stdDevMem = Math.sqrt(targetMemory.stream().mapToDouble(m -> Math.pow(Math.max(0, m) - finalAvgMem, 2))
                 .average().orElse(0.0));
-
-        long totalActivations = (triggerCount != null) ? triggerCount.get() - startTriggerCount : 0;
 
         double overhead = 0;
         if (modeLabel.equals("BASELINE")) {
@@ -500,8 +598,10 @@ public class Experiment2Testb {
                 overhead = ((avgTxMs - baseline) / baseline) * 100.0;
         }
 
-        System.out.printf("%-13s | %-8s | %5d | %16.4f | %11.4f | %20.2f | %14.4f | %11d | %12.2f | %12.3f | %10.4f\n",
-                queryFile, modeLabel, count, avgTxMs, stdDevTx, avgActMs, stdDevAct, totalActivations,
+        System.out.printf("%-13s | %-8s | %5d | %16.4f | %11.4f | %20.4f | %14.4f | %11d | %12.2f | %12.3f | %10.4f\n",
+                queryFile, modeLabel, totalCount, avgTxMs, stdDevTx, avgActMs, stdDevAct, totalActivations,
                 Math.max(0.0, overhead), finalAvgMem, stdDevMem);
+
+        return new QueryResult(avgTxMs, stdDevTx, avgActMs, stdDevAct, finalAvgMem, stdDevMem, overhead);
     }
 }
