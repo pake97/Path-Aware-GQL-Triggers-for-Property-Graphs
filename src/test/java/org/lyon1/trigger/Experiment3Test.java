@@ -37,7 +37,7 @@ public class Experiment3Test {
     private static final String INCREMENTAL_PATH = "src/test/resources/sf0.01/incremental/";
     private static final String QUERIES_PATH = "src/test/resources/queries/";
     private static final String PATTERN = "(:Person)-[:own]->(:Account)<-[:deposit]-(:Loan)";
-    private static final int[] TRIGGER_COUNTS = {1, 3, 5, 10};
+    private static final int[] TRIGGER_COUNTS = { 1, 2, 10, 20, 30, 50 };// { 1, 3, 5, 10 };
 
     @BeforeAll
     void setup() {
@@ -226,6 +226,8 @@ public class Experiment3Test {
 
         AtomicLong lastTriggerDetectedTime = new AtomicLong(0);
         AtomicLong triggerCount = new AtomicLong(0);
+        System.gc();
+        long memBefore = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
         List<String> triggerIds = new ArrayList<>();
         for (int i = 1; i <= n; i++) {
@@ -244,6 +246,9 @@ public class Experiment3Test {
                     0));
             triggerIds.add(triggerId);
         }
+        long memAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        System.out.printf("[%s] Heap delta after trigger registration: %.3f MB%n",
+                modeLabel, (memAfter - memBefore) / (1024.0 * 1024.0));
 
         runFullSequence(true, lastTriggerDetectedTime, triggerCount, false, modeLabel);
 
@@ -355,7 +360,7 @@ public class Experiment3Test {
             }
         }
 
-        System.out.printf("%-13s | %-8s | %5d | %16.4f | %11.4f | %20.4f | %14.4f | %11d | %12.2f | %12.3f | %10.4f\n",
+        System.out.printf("%-13s | %-8s | %5d | %16.4f | %11.4f | %20.2f | %14.4f | %11d | %12.2f | %12.3f | %10.4f\n",
                 queryFile, modeLabel, count, avgTxMs, stdDevTx, avgActMs, stdDevAct, totalActivations,
                 Math.max(0.0, overhead), finalAvgMem, stdDevMem);
     }

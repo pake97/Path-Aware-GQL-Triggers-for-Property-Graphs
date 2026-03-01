@@ -40,12 +40,14 @@ public class Experiment4Test {
     // The real pattern: 1 trigger registered on this, it will fire
     private static final String PATTERN = "(:Person)-[:own]->(:Account)<-[:deposit]-(:Loan)";
 
-    // The impossible pattern: never matched by our dataset, used to add dead-weight triggers
+    // The impossible pattern: never matched by our dataset, used to add dead-weight
+    // triggers
     private static final String IMPOSSIBLE_PATTERN = "(:Person)-[:own]->(:Person)";
 
     // Number of non-firing triggers to add alongside the 1 real trigger.
-    // Total registered triggers per run: 1, 3, 5, 10 (mirrors Experiment3 for direct comparison)
-    private static final int[] NON_FIRING_COUNTS = {0, 2, 4, 9};
+    // Total registered triggers per run: 1, 3, 5, 10 (mirrors Experiment3 for
+    // direct comparison)
+    private static final int[] NON_FIRING_COUNTS = { 0, 1, 9, 19, 29, 49 };// { 0, 2, 4, 9 };
 
     @BeforeAll
     void setup() {
@@ -212,7 +214,8 @@ public class Experiment4Test {
         clearDatabase();
         runFullSequence(false, null, null, false);
 
-        // 3. INDEX: 1 firing trigger + 0, 2, 4, 9 non-firing triggers (totals: 1, 3, 5, 10)
+        // 3. INDEX: 1 firing trigger + 0, 2, 4, 9 non-firing triggers (totals: 1, 3, 5,
+        // 10)
         System.err.println("--- Starting Index Phase ---");
         switchRegistry(TriggerType.INDEX);
         for (int nNonFiring : NON_FIRING_COUNTS) {
@@ -241,6 +244,8 @@ public class Experiment4Test {
 
         AtomicLong lastTriggerDetectedTime = new AtomicLong(0);
         AtomicLong triggerCount = new AtomicLong(0);
+        System.gc();
+        long memBefore = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
         List<String> triggerIds = new ArrayList<>();
 
@@ -275,6 +280,9 @@ public class Experiment4Test {
                     TriggerRegistryInterface.Time.AFTER_COMMIT,
                     0)));
         }
+        long memAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        System.out.printf("[%s] Heap delta after trigger registration: %.3f MB%n",
+                modeLabel, (memAfter - memBefore) / (1024.0 * 1024.0));
 
         runFullSequence(true, lastTriggerDetectedTime, triggerCount, false, modeLabel);
 
@@ -386,7 +394,7 @@ public class Experiment4Test {
             }
         }
 
-        System.out.printf("%-13s | %-8s | %5d | %16.4f | %11.4f | %20.4f | %14.4f | %11d | %12.2f | %12.3f | %10.4f\n",
+        System.out.printf("%-13s | %-8s | %5d | %16.4f | %11.4f | %20.2f | %14.4f | %11d | %12.2f | %12.3f | %10.4f\n",
                 queryFile, modeLabel, count, avgTxMs, stdDevTx, avgActMs, stdDevAct, totalActivations,
                 Math.max(0.0, overhead), finalAvgMem, stdDevMem);
     }

@@ -333,7 +333,8 @@ public class Experiment2Test {
 
         AtomicLong lastTriggerDetectedTime = new AtomicLong(0);
         AtomicLong triggerCount = new AtomicLong(0);
-
+        System.gc();
+        long memBefore = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
         String triggerId = orchestrator.register(new FullTrigger(
                 modeLabel.toLowerCase() + "-experiment-trigger",
                 TriggerRegistryInterface.Scope.PATH,
@@ -347,6 +348,9 @@ public class Experiment2Test {
                 },
                 TriggerRegistryInterface.Time.AFTER_COMMIT,
                 0));
+        long memAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        System.out.printf("[%s] Heap delta after trigger registration: %.3f MB%n",
+                modeLabel, (memAfter - memBefore) / (1024.0 * 1024.0));
 
         runFullSequence(true, lastTriggerDetectedTime, triggerCount, false, modeLabel);
         orchestrator.unregister(triggerId);
@@ -359,7 +363,8 @@ public class Experiment2Test {
 
         AtomicLong lastTriggerDetectedTime = new AtomicLong(0);
         AtomicLong triggerCount = new AtomicLong(0);
-
+        System.gc();
+        long memBefore = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
         String triggerId = orchestrator.register(new FullTrigger(
                 modeLabel.toLowerCase() + "-cascading-trigger",
                 TriggerRegistryInterface.Scope.PATH,
@@ -404,6 +409,9 @@ public class Experiment2Test {
                 },
                 TriggerRegistryInterface.Time.AFTER_COMMIT,
                 0));
+        long memAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        System.out.printf("[%s] Heap delta after trigger registration: %.3f MB%n",
+                modeLabel, (memAfter - memBefore) / (1024.0 * 1024.0));
 
         runFullSequence(true, lastTriggerDetectedTime, triggerCount, false, modeLabel);
         orchestrator.unregister(triggerId);
