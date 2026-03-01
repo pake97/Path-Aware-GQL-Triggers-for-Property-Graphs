@@ -9,14 +9,22 @@ import java.util.Set;
 public final class IndexPathMonitor implements TriggerRegistryInterface.PathMonitor {
 
     private final Map<String, TriggerMachine> machines;
+    // Fix 2: relType -> machines that care about it, built once at construction time
+    private final Map<String, List<TriggerMachine>> machinesByRelType;
     private final org.neo4j.logging.Log log;
 
     private IndexPathMonitor(List<TriggerMachine> triggerMachines, org.neo4j.logging.Log log) {
         Map<String, TriggerMachine> machines = new java.util.HashMap<>();
+        Map<String, List<TriggerMachine>> byRelType = new java.util.HashMap<>();
         for (TriggerMachine machine : triggerMachines) {
             machines.put(machine.getTriggerId(), machine);
+            // Fix 2: index each machine under every relationship type it listens to
+            for (String relType : machine.relevantRelTypes) {
+                byRelType.computeIfAbsent(relType, k -> new java.util.ArrayList<>()).add(machine);
+            }
         }
         this.machines = Map.copyOf(machines);
+        this.machinesByRelType = java.util.Collections.unmodifiableMap(byRelType);
         this.log = log;
     }
 
@@ -45,14 +53,17 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
             try {
                 org.neo4j.graphdb.Relationship rel = tx.getRelationshipByElementId(elementId);
                 String type = rel.getType().name();
-                org.neo4j.graphdb.Node start = rel.getStartNode();
-                org.neo4j.graphdb.Node end = rel.getEndNode();
-
-                for (TriggerMachine machine : machines.values()) {
-                    // Check outgoing transitions: start -> end
-                    processRelationship(tx, machine, rel, start, end, type, false, matchesFound);
-                    // Check incoming transitions: end -> start
-                    processRelationship(tx, machine, rel, end, start, type, true, matchesFound);
+                // Fix 2: only visit machines that declared this relationship type as relevant
+                List<TriggerMachine> relevant = machinesByRelType.getOrDefault(type, List.of());
+                if (!relevant.isEmpty()) {
+                    org.neo4j.graphdb.Node start = rel.getStartNode();
+                    org.neo4j.graphdb.Node end = rel.getEndNode();
+                    for (TriggerMachine machine : relevant) {
+                        // Check outgoing transitions: start -> end
+                        processRelationship(tx, machine, rel, start, end, type, false, matchesFound);
+                        // Check incoming transitions: end -> start
+                        processRelationship(tx, machine, rel, end, start, type, true, matchesFound);
+                    }
                 }
             } catch (Exception e) {
             }
@@ -190,17 +201,21 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
         final String initialLabel;
         final String initialState;
         final Set<String> acceptingStates;
+        // Fix 2: relationship types this machine cares about, used to build machinesByRelType
+        final Set<String> relevantRelTypes;
 
         private final Map<String, SpanningTree> trees = new java.util.HashMap<>();
-        private final Map<NodeState, Set<SpanningTree>> invertedIndex = new java.util.HashMap<>();
+        // Fix 1: nodeId -> (nfaState -> Set<SpanningTree>) for O(1) lookup instead of O(n) scan
+        private final Map<String, Map<String, Set<SpanningTree>>> invertedIndex = new java.util.HashMap<>();
 
         TriggerMachine(String triggerId, Automaton automaton, String initialLabel, String initialState,
-                Set<String> acceptingStates) {
+                Set<String> acceptingStates, Set<String> relevantRelTypes) {
             this.triggerId = triggerId;
             this.automaton = automaton;
             this.initialLabel = initialLabel;
             this.initialState = initialState;
             this.acceptingStates = acceptingStates;
+            this.relevantRelTypes = java.util.Collections.unmodifiableSet(relevantRelTypes);
         }
 
         public String getTriggerId() {
@@ -215,22 +230,24 @@ public final class IndexPathMonitor implements TriggerRegistryInterface.PathMoni
             });
         }
 
+        // Fix 1: nested put — O(1)
         void addToInvertedIndex(NodeState ns, SpanningTree tree) {
-            invertedIndex.computeIfAbsent(ns, k -> new java.util.HashSet<>()).add(tree);
+            invertedIndex
+                    .computeIfAbsent(ns.elementId(), k -> new java.util.HashMap<>())
+                    .computeIfAbsent(ns.state(), k -> new java.util.HashSet<>())
+                    .add(tree);
         }
 
+        // Fix 1: direct map lookup — O(1) instead of O(n) full scan
         Set<String> getStatesForNode(String elementId) {
-            Set<String> states = new java.util.HashSet<>();
-            for (NodeState ns : invertedIndex.keySet()) {
-                if (ns.elementId.equals(elementId)) {
-                    states.add(ns.state);
-                }
-            }
-            return states;
+            return invertedIndex.getOrDefault(elementId, java.util.Map.of()).keySet();
         }
 
+        // Fix 1: two-level lookup — O(1)
         Set<SpanningTree> getTreesForNodeState(String elementId, String state) {
-            return invertedIndex.getOrDefault(new NodeState(elementId, state), java.util.Collections.emptySet());
+            return invertedIndex
+                    .getOrDefault(elementId, java.util.Map.of())
+                    .getOrDefault(state, java.util.Collections.emptySet());
         }
     }
 }

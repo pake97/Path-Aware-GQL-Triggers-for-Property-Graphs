@@ -33,7 +33,7 @@ public class PatternParser {
                 // Relationship match
                 boolean incoming = m.group(4) != null;
                 elements.add(new GraphElement(0, m.group(5), ElementType.RELATIONSHIP, m.start(), incoming));
-                System.out.println("DEBUG: Parsed Rel [" + m.group(5) + "] incoming=" + incoming);
+                //System.out.println("DEBUG: Parsed Rel [" + m.group(5) + "] incoming=" + incoming);
             }
         }
 

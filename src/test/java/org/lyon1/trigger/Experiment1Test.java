@@ -68,6 +68,7 @@ public class Experiment1Test {
             public void info(String message) {
             }
 
+
             @Override
             public void info(String message, Throwable throwable) {
             }
@@ -219,7 +220,8 @@ public class Experiment1Test {
 
         AtomicLong lastTriggerDetectedTime = new AtomicLong(0);
         AtomicLong triggerCount = new AtomicLong(0);
-
+        System.gc();
+        long memBefore = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
         String triggerId = orchestrator.register(new FullTrigger(
                 modeLabel.toLowerCase() + "-experiment-trigger",
                 TriggerRegistryInterface.Scope.PATH,
@@ -233,6 +235,9 @@ public class Experiment1Test {
                 },
                 TriggerRegistryInterface.Time.AFTER_COMMIT,
                 0));
+        long memAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        System.out.printf("[%s] Heap delta after trigger registration: %.3f MB%n",
+                modeLabel, (memAfter - memBefore) / (1024.0 * 1024.0));
 
         runFullSequence(true, lastTriggerDetectedTime, triggerCount, false, modeLabel);
         orchestrator.unregister(triggerId);

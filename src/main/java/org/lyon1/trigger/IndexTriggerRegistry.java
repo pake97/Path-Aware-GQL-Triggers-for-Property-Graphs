@@ -32,8 +32,16 @@ public final class IndexTriggerRegistry extends TriggerRegistry {
                 String initialState = "S0";
                 Set<String> acceptingStates = automaton.getAcceptingStates();
 
+                // Fix 2: collect all relationship types referenced by this pattern
+                Set<String> relevantRelTypes = new HashSet<>();
+                for (GraphElement element : path.getElements()) {
+                    if (element.isRelationship()) {
+                        relevantRelTypes.add(element.getLabel());
+                    }
+                }
+
                 IndexPathMonitor.TriggerMachine machine = new IndexPathMonitor.TriggerMachine(
-                        trigger.id(), automaton, initialLabel, initialState, acceptingStates);
+                        trigger.id(), automaton, initialLabel, initialState, acceptingStates, relevantRelTypes);
 
                 for (GraphElement element : path.getElements()) {
                     if (element.isRelationship())

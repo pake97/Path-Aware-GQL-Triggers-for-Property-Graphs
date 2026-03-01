@@ -70,6 +70,7 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
         // final Set<String> nodeCandidateIds = new LinkedHashSet<>(32);
         final List<String> nodeCandidateIds = new ArrayList<>();
 
+
         // Node creates
         if (!createdNodeLabels.isEmpty()) {
             // final Set<String> globalCreate =
@@ -120,8 +121,8 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
                         this.registry.candidatesForRelationship(TriggerRegistryInterface.EventType.ON_DELETE, type));
             }
         }
-
-        // 4) Path candidates (via your matcher)
+        long t1 = System.nanoTime();
+        // 4) Path candidates
         final Map<String, List<TriggerRegistryInterface.PathMatch>> pathMatches = new HashMap<>();
 
         // Check for node changes
@@ -195,7 +196,8 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
                 log.warn("Predicate for trigger " + t.id() + " threw, skipping. " + ex.getMessage(), ex);
             }
         }
-
+        long t2 = System.nanoTime();
+        log.error("Activation time. Time ns : " + (t2 - t1));
         // 7) Order by priority then input order
         Comparator<PlannedTrigger> comparator = Comparator
                 .comparingInt((PlannedTrigger p) -> p.trigger().priority())
@@ -235,6 +237,7 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
 
     @Override
     public void afterCommit(TransactionData data, List<PlannedTrigger> planned, GraphDatabaseService db) {
+        long t1 = System.nanoTime();
         if (planned == null || planned.isEmpty())
             return;
         log.info("Planned triggers in AFTER COMMIT : " + planned.toString());
@@ -250,6 +253,8 @@ public class Listener implements TransactionEventListener<List<Listener.PlannedT
                         + ex.getMessage(), ex);
             }
         }
+        long t2 = System.nanoTime();
+        log.error("Execution Time. Time ns : " + (t2 - t1));
     }
 
     @Override
